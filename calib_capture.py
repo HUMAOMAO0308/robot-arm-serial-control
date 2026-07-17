@@ -1,123 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import os
 import sys
-import time
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
 
-# ---------------------------------------------------------------------------
-# ZWO ASI SDK constants
-# ---------------------------------------------------------------------------
-ASI_SUCCESS = 0
-ASI_GAIN = 0
-ASI_EXPOSURE = 1
-ASI_FALSE = 0
-ASI_IMG_RAW8 = 0
-
-# ---------------------------------------------------------------------------
-# ZWO ASI SDK wrapper
-# ---------------------------------------------------------------------------
-
-
-def _check(ret: int, label: str) -> None:
-    if ret != ASI_SUCCESS:
-        raise RuntimeError(f"[ZWO] {label} failed (code={ret})")
-
-
-class ZwoASI:
-    """Thin ctypes wrapper around ZWO ASI SDK v1.41."""
-
-    def __init__(self, sdk_path: str):
-        self.lib = ctypes.CDLL(sdk_path)
-        self.camera_id: int = -1
-        self._opened = False
-
-    def get_num_cameras(self) -> int:
-        self.lib.ASIGetNumOfConnectedCameras.restype = ctypes.c_int
-        return self.lib.ASIGetNumOfConnectedCameras()
-
-    def open(self, camera_id: int, width: int, height: int) -> None:
-        self.camera_id = camera_id
-
-        self.lib.ASIOpenCamera.restype = ctypes.c_int
-        self.lib.ASIOpenCamera.argtypes = [ctypes.c_int]
-
-        self.lib.ASIInitCamera.restype = ctypes.c_int
-        self.lib.ASIInitCamera.argtypes = [ctypes.c_int]
-
-        self.lib.ASISetControlValue.restype = ctypes.c_int
-        self.lib.ASISetControlValue.argtypes = [
-            ctypes.c_int, ctypes.c_int, ctypes.c_long, ctypes.c_int,
-        ]
-
-        self.lib.ASISetROIFormat.restype = ctypes.c_int
-        self.lib.ASISetROIFormat.argtypes = [
-            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-        ]
-
-        self.lib.ASIStartVideoCapture.restype = ctypes.c_int
-        self.lib.ASIStartVideoCapture.argtypes = [ctypes.c_int]
-
-        self.lib.ASIGetVideoData.restype = ctypes.c_int
-        self.lib.ASIGetVideoData.argtypes = [
-            ctypes.c_int, ctypes.c_void_p, ctypes.c_long, ctypes.c_int,
-        ]
-
-        self.lib.ASIStopVideoCapture.restype = ctypes.c_int
-        self.lib.ASIStopVideoCapture.argtypes = [ctypes.c_int]
-
-        self.lib.ASICloseCamera.restype = ctypes.c_int
-        self.lib.ASICloseCamera.argtypes = [ctypes.c_int]
-
-        _check(self.lib.ASIOpenCamera(camera_id), "ASIOpenCamera")
-        _check(self.lib.ASIInitCamera(camera_id), "ASIInitCamera")
-        _check(
-            self.lib.ASISetROIFormat(camera_id, width, height, 1, ASI_IMG_RAW8),
-            "ASISetROIFormat",
-        )
-        _check(self.lib.ASIStartVideoCapture(camera_id), "ASIStartVideoCapture")
-        self._opened = True
-
-    def set_exposure(self, exposure_us: int) -> None:
-        _check(
-            self.lib.ASISetControlValue(self.camera_id, ASI_EXPOSURE, exposure_us, ASI_FALSE),
-            "ASISetControlValue(EXPOSURE)",
-        )
-
-    def set_gain(self, gain: int) -> None:
-        _check(
-            self.lib.ASISetControlValue(self.camera_id, ASI_GAIN, gain, ASI_FALSE),
-            "ASISetControlValue(GAIN)",
-        )
-
-    def grab_frame(self, width: int, height: int) -> np.ndarray:
-        buf_size = width * height
-        buf = ctypes.create_string_buffer(buf_size)
-        pbuf = ctypes.cast(buf, ctypes.c_void_p)
-        ret = self.lib.ASIGetVideoData(self.camera_id, pbuf, buf_size, 1000)
-        _check(ret, "ASIGetVideoData")
-        return np.frombuffer(buf.raw, dtype=np.uint8).reshape(height, width)
-
-    def close(self) -> None:
-        if not self._opened:
-            return
-        try:
-            self.lib.ASIStopVideoCapture(self.camera_id)
-            self.lib.ASICloseCamera(self.camera_id)
-        except Exception:
-            pass
-        self._opened = False
-
-
-# ---------------------------------------------------------------------------
-# Chessboard capture UI
-# ---------------------------------------------------------------------------
+from zwo_camera import ZwoCamera
 
 CHESSBOARD_SIZE = (9, 6)  # internal corners (cols, rows)
 
@@ -125,11 +16,6 @@ CHESSBOARD_SIZE = (9, 6)  # internal corners (cols, rows)
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Capture chessboard images from ZWO camera for intrinsic calibration.",
-    )
-    p.add_argument(
-        "--sdk",
-        default="/home/hu/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so",
-        help="Path to libASICamera2.so",
     )
     p.add_argument("--camera-id", type=int, default=0, help="ZWO camera index")
     p.add_argument("--width", type=int, default=1920, help="ROI width")
@@ -146,11 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def draw_ui(frame: np.ndarray, count: int, exposure: int, gain: int) -> np.ndarray:
-    """Overlay status text on the frame."""
     display = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
     lines = [
         f"Captured: {count} | Exposure: {exposure}us | Gain: {gain}",
-        "[SPACE] Capture  [Q/ESC] Quit  [+/-] Exposure  [g/G] Gain  [r] Reset corners",
+        "[SPACE] Capture  [Q/ESC] Quit  [+/-] Exposure  [g/G] Gain",
         "Aim for 20-30 images, varied angles, chessboard fully visible",
     ]
     for i, line in enumerate(lines):
@@ -163,28 +48,21 @@ def draw_ui(frame: np.ndarray, count: int, exposure: int, gain: int) -> np.ndarr
 
 def main() -> int:
     args = build_parser().parse_args()
-    sdk_path = os.path.realpath(args.sdk)
-    if not os.path.isfile(sdk_path):
-        print(f"[ERROR] SDK not found: {sdk_path}")
-        return 1
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Open camera ---
-    cam = ZwoASI(sdk_path)
     try:
-        num = cam.get_num_cameras()
-        if num <= 0:
-            print("[ERROR] No ZWO camera detected")
-            return 1
-        print(f"[INFO] {num} camera(s) connected")
-
-        cam.open(args.camera_id, args.width, args.height)
-        cam.set_exposure(args.exposure)
-        cam.set_gain(args.gain)
-        print(f"[INFO] Camera opened: {args.width}x{args.height}")
-    except Exception as e:
+        cam = ZwoCamera()
+        cam.open(
+            camera_id=args.camera_id,
+            width=args.width,
+            height=args.height,
+            exposure_us=args.exposure,
+            gain=args.gain,
+        )
+        print(f"[INFO] Camera: {cam.camera_info.name}")
+    except RuntimeError as e:
         print(f"[ERROR] Failed to open camera: {e}")
         return 1
 
@@ -203,8 +81,7 @@ def main() -> int:
 
     try:
         while True:
-            frame = cam.grab_frame(args.width, args.height)
-            corners_found = False
+            frame = cam.grab_frame()
 
             if frame.ndim == 3 and frame.shape[2] == 3:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -214,11 +91,10 @@ def main() -> int:
             ret_corners, corners = cv2.findChessboardCorners(
                 gray, CHESSBOARD_SIZE, None,
             )
-            corners_found = ret_corners
 
-            display = draw_ui(gray, captured, exposure, gain)
+            display = draw_ui(gray, captured, cam.exposure_us, cam.gain)
 
-            if corners_found:
+            if ret_corners:
                 cv2.drawChessboardCorners(
                     display, CHESSBOARD_SIZE, corners, ret_corners,
                 )
@@ -226,12 +102,12 @@ def main() -> int:
             cv2.imshow("Chessboard Capture", display)
             key = cv2.waitKey(30) & 0xFF
 
-            if key in (ord("q"), 27):  # Q or ESC
+            if key in (ord("q"), 27):
                 print("[INFO] Quit")
                 break
 
             if key == ord(" "):
-                if corners_found:
+                if ret_corners:
                     fname = output_dir / f"calib_{captured:04d}.png"
                     cv2.imwrite(str(fname), gray)
                     captured += 1

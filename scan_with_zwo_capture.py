@@ -15,6 +15,7 @@ import serial
 import numpy as np
 
 from main import MotionConfig, joint3_sequence, send_command
+from zwo_camera import ZwoCamera
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,159 +118,44 @@ def build_parser() -> argparse.ArgumentParser:
     return args, motion
 
 
-ASI_GAIN = 0
-ASI_EXPOSURE = 1
-ASI_FALSE = 0
-ASI_SUCCESS = 0
-ASI_IMG_RAW8 = 0
-
-
-def _check(ret: int, label: str) -> None:
-    if ret != ASI_SUCCESS:
-        raise RuntimeError(f"[ZWO] {label} failed (code={ret})")
-
-
-def import_zwoasi(camera_id: int, exposure_us: int, gain: int):
-    import ctypes
-    import os
-
-    sdk_path = os.path.realpath(
-        "/home/hu/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so"
-    )
-    print(f"[INFO] Loading SDK: {sdk_path}")
-    lib = ctypes.CDLL(sdk_path)
-
-    lib.ASIGetNumOfConnectedCameras.restype = ctypes.c_int
-
-    lib.ASIGetCameraProperty.restype = ctypes.c_int
-    lib.ASIGetCameraProperty.argtypes = [ctypes.c_void_p, ctypes.c_int]
-
-    lib.ASIOpenCamera.restype = ctypes.c_int
-    lib.ASIOpenCamera.argtypes = [ctypes.c_int]
-
-    lib.ASIInitCamera.restype = ctypes.c_int
-    lib.ASIInitCamera.argtypes = [ctypes.c_int]
-
-    lib.ASISetControlValue.restype = ctypes.c_int
-    lib.ASISetControlValue.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_long, ctypes.c_int]
-
-    lib.ASISetROIFormat.restype = ctypes.c_int
-    lib.ASISetROIFormat.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
-
-    lib.ASIStartVideoCapture.restype = ctypes.c_int
-    lib.ASIStartVideoCapture.argtypes = [ctypes.c_int]
-
-    lib.ASIStopVideoCapture.restype = ctypes.c_int
-    lib.ASIStopVideoCapture.argtypes = [ctypes.c_int]
-
-    lib.ASIGetVideoData.restype = ctypes.c_int
-    lib.ASIGetVideoData.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_long, ctypes.c_int]
-
-    lib.ASICloseCamera.restype = ctypes.c_int
-    lib.ASICloseCamera.argtypes = [ctypes.c_int]
-
-    class ASI_CAMERA_INFO(ctypes.Structure):
-        _fields_ = [
-            ("Name", ctypes.c_char * 64),
-            ("CameraID", ctypes.c_int),
-            ("MaxHeight", ctypes.c_long),
-            ("MaxWidth", ctypes.c_long),
-            ("IsColorCam", ctypes.c_int),
-            ("BayerPattern", ctypes.c_int),
-            ("SupportedBins", ctypes.c_int * 16),
-            ("SupportedVideoFormat", ctypes.c_int * 8),
-            ("PixelSize", ctypes.c_double),
-            ("MechanicalShutter", ctypes.c_int),
-            ("ST4Port", ctypes.c_int),
-            ("IsCoolerCam", ctypes.c_int),
-            ("IsUSB3Host", ctypes.c_int),
-            ("IsUSB3Camera", ctypes.c_int),
-            ("ElecPerADU", ctypes.c_float),
-            ("BitDepth", ctypes.c_int),
-            ("IsTriggerCam", ctypes.c_int),
-            ("Unused", ctypes.c_char * 16),
-        ]
-
-    num = lib.ASIGetNumOfConnectedCameras()
-    if num <= 0:
-        raise RuntimeError("No ZWO camera detected")
-    print(f"[INFO] {num} camera(s) connected")
-
-    info = ASI_CAMERA_INFO()
-    _check(lib.ASIGetCameraProperty(ctypes.byref(info), camera_id), "ASIGetCameraProperty")
-    print(f"[INFO] Found camera: {info.Name.decode()} (ID={info.CameraID})")
-
-    _check(lib.ASIOpenCamera(camera_id), "ASIOpenCamera")
-
-    _check(lib.ASIInitCamera(camera_id), "ASIInitCamera")
-
-    _check(
-        lib.ASISetControlValue(camera_id, ASI_EXPOSURE, exposure_us, ASI_FALSE),
-        "ASISetControlValue(EXPOSURE)",
-    )
-    _check(
-        lib.ASISetControlValue(camera_id, ASI_GAIN, gain, ASI_FALSE),
-        "ASISetControlValue(GAIN)",
-    )
-    print(f"[INFO] Exposure={exposure_us}us, Gain={gain}")
-
-    _check(
-        lib.ASISetROIFormat(camera_id, 640, 480, 1, ASI_IMG_RAW8),
-        "ASISetROIFormat",
-    )
-
-    _check(lib.ASIStartVideoCapture(camera_id), "ASIStartVideoCapture")
-    print(f"[INFO] Video capture started")
-
-    return lib
-
-
-def capture_frame(lib, camera_id: int, width=640, height=480) -> bytes:
-    import ctypes
-    buf_size = width * height
-    buf = ctypes.create_string_buffer(buf_size)
-    pBuf = ctypes.cast(buf, ctypes.c_void_p)
-    ret = lib.ASIGetVideoData(camera_id, pBuf, buf_size, 1000)
-    _check(ret, "ASIGetVideoData")
-    return buf.raw
-
-
 class ZwoCaptureSession:
     def __init__(
         self,
         camera_index: int,
         exposure_us: int,
         gain: int,
+        width: int,
+        height: int,
         output_dir: Path,
     ) -> None:
         self.camera_index = camera_index
         self.exposure_us = exposure_us
         self.gain = gain
+        self.width = width
+        self.height = height
         self.output_dir = output_dir.resolve()
-        self.lib = None
+        self.cam: ZwoCamera | None = None
 
     def open(self) -> None:
-        self.lib = import_zwoasi(self.camera_index, self.exposure_us, self.gain)
+        self.cam = ZwoCamera()
+        self.cam.open(self.camera_index, self.width, self.height, self.exposure_us, self.gain)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def capture_step(self, step: int, joint3_angle: float) -> Path:
-        if self.lib is None:
+        if self.cam is None:
             raise RuntimeError("Camera session is not open.")
-        
-        frame_data = capture_frame(self.lib, self.camera_index)
-        img = np.frombuffer(frame_data, dtype=np.uint8).reshape(480, 640)
+        frame = self.cam.grab_frame()
         image_path = self.output_dir / f"step_{step:04d}_j3_{joint3_angle:06.1f}.png"
-        Image.fromarray(img).save(image_path)
+        Image.fromarray(frame).save(image_path)
         return image_path
 
     def close(self) -> None:
-        if self.lib is not None:
+        if self.cam is not None:
             try:
-                self.lib.ASIStopVideoCapture(self.camera_index)
-                self.lib.ASICloseCamera(self.camera_index)
+                self.cam.close()
             except Exception:
                 pass
-            self.lib = None
+            self.cam = None
 
 
 def iso_timestamp() -> str:
@@ -313,6 +199,8 @@ def run_scan_with_capture(args, motion: MotionConfig) -> int:
         camera_index=args.camera_index,
         exposure_us=args.exposure_us,
         gain=args.gain,
+        width=640,
+        height=480,
         output_dir=args.output_dir,
     )
     log_csv_path = args.output_dir / "captures_log.csv"

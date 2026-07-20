@@ -20,6 +20,30 @@ from zwo_camera import ZwoCamera
 from calibrate import load_intrinsics
 
 
+# ---------------------------------------------------------------------------
+# Joint hardware limits (from dummy_robot.cpp firmware)
+# ---------------------------------------------------------------------------
+# Format: (min_degrees, max_degrees, label, [default_scan_start, default_scan_end])
+JOINT_FIRMWARE_LIMITS = {
+    1: (-170, 170, "J1 底座旋转", -60, 60),
+    2: (-73,  90,  "J2 肩部",   -65, -50),
+    3: ( 35, 180,  "J3 肘部",   155, 135),
+    4: (-180, 180, "J4 腕部旋转", -30, 30),
+    5: (-120, 120, "J5 腕部俯仰", -30, 30),
+    6: (-720, 720, "J6 末端旋转", -60, 60),
+}
+
+
+def _check_joint_limits(joint_index_1based: int, start: float, end: float) -> None:
+    """Print warning if start/end angles exceed firmware limits."""
+    if joint_index_1based not in JOINT_FIRMWARE_LIMITS:
+        return
+    lo, hi, label, _, _ = JOINT_FIRMWARE_LIMITS[joint_index_1based]
+    for name, val in [("起始", start), ("终止", end)]:
+        if val < lo or val > hi:
+            print(f"[WARN] {label}: {name}角度 {val}° 超出硬件范围 [{lo}°, {hi}°] — 固件将拒绝执行")
+
+
 def _send_command(ser: serial.Serial, command: bytes, label: str) -> None:
     ser.write(command)
     ser.flush()
@@ -45,27 +69,42 @@ class ScanConfig:
 def generate_arc_scan(
     base_joints: List[float],
     joint_index: int,        # which joint to vary (0-based)
-    start_angle: float,
-    end_angle: float,
-    steps: int,
+    start_angle: Optional[float] = None,
+    end_angle: Optional[float] = None,
+    steps: int = 40,
     speed: int = 50,
 ) -> ScanConfig:
-    """Sweep a single joint through an angle range, keeping others fixed."""
-    waypoints: List[List[float]] = []
-    labels: List[str] = []
-    angles = [start_angle + (end_angle - start_angle) * i / max(steps - 1, 1)
+    """Sweep a single joint through an angle range, keeping others fixed.
+
+    If start_angle/end_angle are not given, uses the per-joint default scan
+    range from JOINT_FIRMWARE_LIMITS (matching the original scan_with_zwo_capture
+    behaviour for J3).
+    """
+    j1b = joint_index + 1
+    if j1b in JOINT_FIRMWARE_LIMITS:
+        lo, hi, label, def_start, def_end = JOINT_FIRMWARE_LIMITS[j1b]
+    else:
+        lo, hi, label, def_start, def_end = -180, 180, f"J{j1b}", -60, 60
+
+    a_start = start_angle if start_angle is not None else def_start
+    a_end   = end_angle   if end_angle   is not None else def_end
+
+    _check_joint_limits(j1b, a_start, a_end)
+
+    angles = [a_start + (a_end - a_start) * i / max(steps - 1, 1)
               for i in range(steps)]
 
-    joint_name = f"J{joint_index + 1}"
-    for i, angle in enumerate(angles):
+    waypoints: List[List[float]] = []
+    labels: List[str] = []
+    for angle in angles:
         joints = list(base_joints)
         joints[joint_index] = round(angle, 2)
         waypoints.append(joints)
-        labels.append(f"{joint_name}={angle:.1f}°")
+        labels.append(f"{label}={angle:.1f}°")
     return ScanConfig(
-        name=f"arc_{joint_name}",
-        description=f"Sweep {joint_name} from {start_angle}° to {end_angle}° "
-                    f"in {steps} steps",
+        name=f"arc_J{j1b}",
+        description=f"Scan {label} from {a_start}° to {a_end}° "
+                    f"in {steps} steps (limit: [{lo}°, {hi}°])",
         waypoints=waypoints,
         speeds=[speed] * steps,
         waypoint_labels=labels,
@@ -76,7 +115,7 @@ def generate_hemisphere_scan(
     base_joints: List[float],
     j1_range: tuple = (-60, 60),
     j1_steps: int = 5,
-    j2_range: tuple = (-70, -55),
+    j2_range: tuple = (-65, -50),
     j3_range: tuple = (140, 160),
     elevation_steps: int = 4,
     speed: int = 50,
@@ -199,15 +238,15 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("trajectory (arc / elevation / hemisphere)")
     g.add_argument("--joint", type=int, default=3,
                    help="Joint to sweep for arc/elevation mode (1-6)")
-    g.add_argument("--start-angle", type=float, default=135.0,
-                   help="Sweep start angle (degrees)")
-    g.add_argument("--end-angle", type=float, default=175.0,
-                   help="Sweep end angle (degrees)")
+    g.add_argument("--start-angle", type=float, default=None,
+                   help="Sweep start angle (default: per-joint, e.g. J3=155°)")
+    g.add_argument("--end-angle", type=float, default=None,
+                   help="Sweep end angle (default: per-joint, e.g. J3=135°)")
     g.add_argument("--steps", type=int, default=40,
                    help="Number of steps in the sweep")
     g.add_argument("--j1-range", type=str, default="-60,60",
                    help="J1 range for hemisphere: start,end")
-    g.add_argument("--j2-range", type=str, default="-70,-55",
+    g.add_argument("--j2-range", type=str, default="-65,-50",
                    help="J2 range for hemisphere")
     g.add_argument("--j3-range", type=str, default="140,160",
                    help="J3 range for hemisphere")
@@ -247,6 +286,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also compute & log camera poses via FK")
     g.add_argument("--disable", action="store_true", default=False,
                    help="Send !DISABLE on exit")
+    g.add_argument("--show-limits", action="store_true", default=False,
+                   help="Print firmware joint limits and exit")
 
     return p
 
@@ -258,7 +299,28 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
+    if args.show_limits:
+        print("\n  固件关节角度限制 (dummy_robot.cpp):\n")
+        print("  Joint   Min       Max       说明")
+        print("  ─────   ────────  ────────  ────────")
+        for j in range(1, 7):
+            lo, hi, label, _, _ = JOINT_FIRMWARE_LIMITS[j]
+            print(f"  J{j}      {lo:>6}°   {hi:>6}°   {label}")
+        print("\n  arc 模式默认扫描范围:")
+        for j in range(1, 7):
+            lo, hi, label, ds, de = JOINT_FIRMWARE_LIMITS[j]
+            print(f"  {label}: {ds}° → {de}°")
+        return 0
+
     base_joints = [args.j1, args.j2, args.j3, args.j4, args.j5, args.j6]
+
+    # --- Check base pose joint limits ---
+    for i, val in enumerate(base_joints):
+        _check_joint_limits(i + 1, val, val)
+        if i + 1 in JOINT_FIRMWARE_LIMITS:
+            lo, hi, _, _, _ = JOINT_FIRMWARE_LIMITS[i + 1]
+            if val < lo or val > hi:
+                print(f"  => J{i+1}={val}° 不在 [{lo}°, {hi}°] 范围内")
 
     # --- Build scan ---
     if args.mode == "file":
@@ -269,22 +331,32 @@ def main() -> int:
     elif args.mode == "arc":
         scan = generate_arc_scan(
             base_joints, args.joint - 1,
-            args.start_angle, args.end_angle,
-            args.steps, args.speed,
+            start_angle=args.start_angle,
+            end_angle=args.end_angle,
+            steps=args.steps,
+            speed=args.speed,
         )
     elif args.mode == "elevation":
         scan = generate_arc_scan(
             base_joints, args.joint - 1,
-            args.start_angle, args.end_angle,
-            args.steps, args.speed,
+            start_angle=args.start_angle,
+            end_angle=args.end_angle,
+            steps=args.steps,
+            speed=args.speed,
         )
     else:  # hemisphere
+        j1r = tuple(float(v) for v in args.j1_range.split(","))
+        j2r = tuple(float(v) for v in args.j2_range.split(","))
+        j3r = tuple(float(v) for v in args.j3_range.split(","))
+        _check_joint_limits(1, j1r[0], j1r[1])
+        _check_joint_limits(2, j2r[0], j2r[1])
+        _check_joint_limits(3, j3r[0], j3r[1])
         scan = generate_hemisphere_scan(
             base_joints,
-            j1_range=tuple(float(v) for v in args.j1_range.split(",")),
+            j1_range=j1r,
             j1_steps=args.j1_steps,
-            j2_range=tuple(float(v) for v in args.j2_range.split(",")),
-            j3_range=tuple(float(v) for v in args.j3_range.split(",")),
+            j2_range=j2r,
+            j3_range=j3r,
             elevation_steps=args.elevation_steps,
             speed=args.speed,
         )

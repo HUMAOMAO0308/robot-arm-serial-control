@@ -12,11 +12,18 @@ from typing import Iterable, List, Optional, Sequence
 
 import numpy as np
 import serial
+import cv2
 from PIL import Image
 
-from main import MotionConfig, send_command
 from robot_kinematics import forward_kinematics, pose_to_rt, pose_to_rpy
 from zwo_camera import ZwoCamera
+from calibrate import load_intrinsics
+
+
+def _send_command(ser: serial.Serial, command: bytes, label: str) -> None:
+    ser.write(command)
+    ser.flush()
+    print(f"  [SEND] {label}: {command.decode('utf-8').strip()}")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +238,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--camera-height", type=int, default=1080)
     g.add_argument("--exposure", type=int, default=50000)
     g.add_argument("--gain", type=int, default=50)
+    g.add_argument("--intrinsics", type=Path, default=None,
+                   help="camera_intrinsics.json — also undistort every frame")
 
     g.add_argument("--output-dir", type=Path, default=Path("scans"),
                    help="Output directory")
@@ -305,7 +314,7 @@ def main() -> int:
         return 1
 
     # --- Home ---
-    send_command(ser, b"!START\n", "Home")
+    _send_command(ser, b"!START\n", "Home")
     print(f"[INFO] Waiting {args.home_wait:.1f}s for homing")
     time.sleep(args.home_wait)
 
@@ -320,6 +329,14 @@ def main() -> int:
         print(f"[ERROR] Camera: {e}")
         ser.close()
         return 1
+
+    # --- Load intrinsics for undistort ---
+    camera_matrix = None
+    dist_coeffs = None
+    if args.intrinsics and args.intrinsics.is_file():
+        camera_matrix, dist_coeffs = load_intrinsics(args.intrinsics)
+        print(f"[OK] Intrinsics loaded: fx={camera_matrix[0,0]:.1f} "
+              f"→ undistort enabled")
 
     # --- Scan ---
     print(f"\n{'='*55}")
@@ -339,11 +356,13 @@ def main() -> int:
 
             # Move
             cmd = format_move(joints, speed)
-            send_command(ser, cmd, f"Move")
+            _send_command(ser, cmd, f"Move")
             time.sleep(args.capture_delay)
 
-            # Capture
+            # Capture & undistort
             frame = cam.grab_frame()
+            if camera_matrix is not None:
+                frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
             img_path = images_dir / f"scan_{i:04d}.png"
             Image.fromarray(frame).save(img_path)
 
@@ -392,12 +411,12 @@ def main() -> int:
         # --- Return to safe pose ---
         if ser:
             try:
-                send_command(ser,
+                _send_command(ser,
                              format_move(base_joints, args.speed),
                              "Return to base pose")
                 time.sleep(args.settle_wait)
                 if args.disable:
-                    send_command(ser, b"!DISABLE\n", "Disable")
+                    _send_command(ser, b"!DISABLE\n", "Disable")
             except Exception as e:
                 print(f"[WARN] Failed to return: {e}")
             ser.close()

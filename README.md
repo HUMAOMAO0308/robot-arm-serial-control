@@ -16,11 +16,12 @@ python3 menu.py
 ║   ────────────────────────────────────           ║
 ║   3. 查看关节限制                                  ║
 ║   4. 帮助                                         ║
+║   5. 可视化控制    (3D Web 视图 + 滑块，可离线)    ║
 ║   0. 退出                                         ║
 ╚══════════════════════════════════════════════════╝
 ```
 
-所有参数都有默认值，**直接按 Enter 即可**。不接硬件也能打开浏览菜单（选择 3、4）。
+所有参数都有默认值，**直接按 Enter 即可**。不接硬件也能打开浏览菜单（选择 3、4、5）。
 
 ## 菜单选项说明
 
@@ -36,8 +37,9 @@ python3 menu.py
 | → 手眼标定          | 算出相机在末端法兰的安装位姿 T_cam_to_ee    |                |
 | **3. 查看关节限制** | 打印 6 个关节的固件角度范围                 | 偶尔查看       |
 | **4. 帮助**         | 使用提示                                    | 随时           |
+| **5. 可视化控制**   | Three.js 3D 模型 + 6 关节滑块，浏览器运行   | 随时           |
 
-> 选项 3 和 4 不需要连接任何硬件，可以先打开浏览。
+> 选项 3、4、5 不需要连接任何硬件，可以先打开浏览。
 
 ---
 
@@ -58,14 +60,17 @@ python3 menu.py
 
 ## 项目结构
 
-| 文件                  | 功能                                |
-| --------------------- | ----------------------------------- |
-| `menu.py`             | **交互式菜单（推荐入口）**          |
-| `scan_multi_joint.py` | 扫描+拍照：单轴/双轴/自定义轨迹     |
-| `calibrate.py`        | 相机内参标定：棋盘格采集 + 内参计算 |
-| `hand_eye_calib.py`   | 手眼标定：T_cam_to_ee               |
-| `zwo_camera.py`       | ZWO ASI 相机驱动                    |
-| `robot_kinematics.py` | 正运动学/逆运动学                   |
+| 文件                  | 功能                                   |
+| --------------------- | -------------------------------------- |
+| `menu.py`             | **交互式菜单（推荐入口）**             |
+| `visual_server.py`    | **3D 可视化控制（Three.js Web 服务）** |
+| `scan_multi_joint.py` | 扫描+拍照：单轴/双轴/自定义轨迹        |
+| `calibrate.py`        | 相机内参标定：棋盘格采集 + 内参计算    |
+| `hand_eye_calib.py`   | 手眼标定：T_cam_to_ee                  |
+| `zwo_camera.py`       | ZWO ASI 相机驱动                       |
+| `robot_kinematics.py` | 正运动学/逆运动学（URDF 参数）         |
+| `sdk/`                | DummyRobot SDK（串口控制+虚拟机器人）  |
+| `static/`             | 可视化前端（HTML + STL 网格）          |
 
 ---
 
@@ -76,10 +81,11 @@ python3 menu.py
   菜单 2 标定工具 → 采集棋盘格 → 计算内参 → camera_intrinsics.json
   装好相机         → 手眼标定   → hand_eye_calib/hand_eye_result.json
 
-日常实验（每次）:
-  菜单 1 扫描拍照 → arc 或 hemisphere → 图片 + CSV + (可选:去畸变 +FK)
+ 日常实验（每次）:
+   菜单 1 扫描拍照 → arc 或 hemisphere → 图片 + CSV + (可选:去畸变 +FK)
+   菜单 5 可视化控制 → 3D 预览机械臂姿态 + 滑块控制
 
-三维重建（离线）:
+ 三维重建（离线）:
   图片 + 每帧位姿 → COLMAP / 3DGS → 植物点云
 ```
 
@@ -92,39 +98,43 @@ python3 menu.py
 ### 扫描拍照
 
 ```bash
-# 单轴扫描 J3（默认 155→135°）
+# 单轴扫描 J3（默认 155→135°） → scans/20260720_1430_arc_J3/
 python3 scan_multi_joint.py --mode arc --joint 3
 
-# 单轴扫描 J1（默认 -60→60°）
-python3 scan_multi_joint.py --mode arc --joint 1
+# 指定扫描名称 → scans/20260720_1430_arc_J3_plant1/
+python3 scan_multi_joint.py --mode arc --joint 3 --name plant1
 
-# 自定义单轴参数
+# 自定义单轴参数 + 去畸变 + FK
 python3 scan_multi_joint.py --mode arc --joint 3 \
     --start-angle 155 --end-angle 135 --steps 200 \
     --pause-time 1.0 --capture-delay 0.3 \
-    --intrinsics camera_intrinsics.json --compute-fk
+    --intrinsics camera_intrinsics.json --compute-fk \
+    --name my_experiment
 
 # 双轴 hemisphere
 python3 scan_multi_joint.py --mode hemisphere \
     --j1-range "-60,60" --j1-steps 7 \
     --j2-range "-65,-50" --j3-range "140,160" \
-    --elevation-steps 4 --output-dir scans/plant_01
+    --elevation-steps 4 --name plant_scan
 
 # 查看关节限制
 python3 scan_multi_joint.py --show-limits
 ```
 
-| 通用参数          | 默认值         | 含义                        |
-| ----------------- | -------------- | --------------------------- |
-| `--port`          | `/dev/ttyACM0` | 机械臂串口                  |
-| `--speed`         | `50`           | 运动速度                    |
-| `--pause-time`    | `1.0`          | 每位姿停留（秒）            |
-| `--capture-delay` | `0.3`          | 到位后延迟拍照（秒）        |
-| `--exposure`      | `50000`        | ZWO 曝光（µs）              |
-| `--gain`          | `50`           | ZWO 增益                    |
-| `--intrinsics`    | `None`         | 内参 JSON，提供后每帧去畸变 |
-| `--compute-fk`    | `False`        | 每帧计算末端位姿写入 CSV    |
-| `--output-dir`    | `scans/`       | 输出目录                    |
+| 通用参数          | 默认值         | 含义                                 |
+| ----------------- | -------------- | ------------------------------------ |
+| `--port`          | `/dev/ttyACM0` | 机械臂串口                           |
+| `--speed`         | `50`           | 运动速度                             |
+| `--pause-time`    | `1.0`          | 每位姿停留（秒）                     |
+| `--capture-delay` | `0.3`          | 到位后延迟拍照（秒）                 |
+| `--exposure`      | `50000`        | ZWO 曝光（µs）                       |
+| `--gain`          | `50`           | ZWO 增益                             |
+| `--intrinsics`    | `None`         | 内参 JSON，提供后每帧去畸变          |
+| `--compute-fk`    | `False`        | 每帧计算末端位姿写入 CSV             |
+| `--output-dir`    | `scans/`       | 输出父目录（自动创建时间戳子文件夹） |
+| `--name`          | `""`           | 扫描名称，追加到子文件夹名中         |
+
+> 输出自动组织为 `scans/YYYYMMDD_HHMM_mode_name/`，不填 `--name` 则只有时间戳+模式名。镜像保存在子目录的 `images/` 下。
 
 ### 标定
 
@@ -138,6 +148,20 @@ python3 calibrate.py compute --input-dir calib_images --square-size 25.0
 # 手眼标定
 python3 hand_eye_calib.py --port /dev/ttyACM0 \
     --intrinsics camera_intrinsics.json --square-size 25.0 --method tsai
+```
+
+### 可视化控制
+
+```bash
+# 启动 Three.js 3D 可视化（虚拟模式，不连硬件）
+python3 visual_server.py
+
+# 连接真实机械臂
+python3 visual_server.py --robot-port /dev/ttyACM0
+
+# 浏览器打开 http://127.0.0.1:8765
+# 6 个关节滑块拖动 → 3D 模型实时跟新（GPU 渲染，流畅）
+# Connect / Home / Send / Read / Reset 按钮控制实物
 ```
 
 ### 运动学

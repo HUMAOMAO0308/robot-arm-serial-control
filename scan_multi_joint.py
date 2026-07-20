@@ -282,6 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     g.add_argument("--output-dir", type=Path, default=Path("scans"),
                    help="Output directory")
+    g.add_argument("--name", type=str, default="",
+                   help="Scan name for auto sub-folder (e.g. plant1)")
     g.add_argument("--compute-fk", action="store_true", default=False,
                    help="Also compute & log camera poses via FK")
     g.add_argument("--disable", action="store_true", default=False,
@@ -366,8 +368,12 @@ def main() -> int:
         print("[ERROR] No waypoints generated")
         return 1
 
-    # --- Setup output ---
-    output_dir = args.output_dir.resolve()
+    # --- Setup output (auto-named sub-folder) ---
+    ts = time.strftime("%Y%m%d_%H%M")
+    name_part = f"_{args.name}" if args.name else ""
+    mode_label = f"{scan.name}_{args.joint}" if args.mode == "arc" else scan.name
+    folder_name = f"{ts}_{mode_label}{name_part}"
+    output_dir = (args.output_dir / folder_name).resolve()
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -419,16 +425,26 @@ def main() -> int:
     print(f"{'='*55}\n")
 
     capture_records: list[dict] = []
+    start_time = time.time()
+    scan_error = False
+
+    def _progress_bar(current: int, total: int, elapsed: float) -> str:
+        pct = current / max(total, 1)
+        bar_len = 25
+        filled = int(bar_len * pct)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        eta = (elapsed / max(current, 1)) * (total - current)
+        return (f"\r  [{bar}]  {current}/{total} ({pct*100:.0f}%)  |  "
+                f"{elapsed:.0f}s elapsed  |  ETA {eta:.0f}s  |  "
+                f"{current} images saved")
 
     try:
         for i, (joints, speed) in enumerate(zip(scan.waypoints, scan.speeds)):
             label = scan.waypoint_labels[i] if i < len(scan.waypoint_labels) else f"wp_{i}"
-            print(f"[{i+1}/{n_waypoints}] {label}")
-            print(f"         Joints: [{', '.join(f'{j:.1f}' for j in joints)}]")
 
             # Move
             cmd = format_move(joints, speed)
-            _send_command(ser, cmd, f"Move")
+            _send_command(ser, cmd, f"Move {label}")
             time.sleep(args.capture_delay)
 
             # Capture & undistort
@@ -465,16 +481,20 @@ def main() -> int:
                 })
 
             capture_records.append(record)
+            sys.stdout.write(_progress_bar(len(capture_records), n_waypoints,
+                                          time.time() - start_time))
+            sys.stdout.flush()
 
             remaining = max(0, args.pause_time - args.capture_delay)
             if remaining > 0:
                 time.sleep(remaining)
 
     except KeyboardInterrupt:
-        print("[WARN] Interrupted by user")
+        print("\n[WARN] Interrupted by user")
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        return 1
+        import traceback; traceback.print_exc()
+        scan_error = True
     finally:
         # --- Close camera ---
         if cam:
@@ -493,7 +513,8 @@ def main() -> int:
                 print(f"[WARN] Failed to return: {e}")
             ser.close()
 
-    # --- Write logs ---
+    # --- Write logs (add newline after progress bar) ---
+    print()
     summary = {
         "generated_at": iso_timestamp(),
         "scan": {
@@ -536,6 +557,9 @@ def main() -> int:
 
     print(f"[SAVE]  {summary_json}")
     print(f"[SAVE]  {log_csv}")
+    if scan_error:
+        print(f"[WARN] Scan had errors — {len(capture_records)} frames saved (partial)")
+        return 1
     print(f"[DONE]  {n_waypoints} frames saved to {images_dir}/")
     return 0
 

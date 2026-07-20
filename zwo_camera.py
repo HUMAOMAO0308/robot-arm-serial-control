@@ -17,8 +17,11 @@ ASI_EXPOSURE = 1
 ASI_FALSE = 0
 ASI_IMG_RAW8 = 0
 
-DEFAULT_SDK_PATH = os.path.realpath(
-    "/home/hu/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so"
+DEFAULT_SDK_PATH = os.environ.get(
+    "ASI_SDK_PATH",
+    os.path.realpath(
+        "/home/hu/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so"
+    ),
 )
 
 
@@ -179,25 +182,29 @@ class ZwoCamera:
 
         # Open, init, configure
         self._check(sys.ASIOpenCamera(cid), "ASIOpenCamera")
-        self._check(sys.ASIInitCamera(cid), "ASIInitCamera")
+        try:
+            self._check(sys.ASIInitCamera(cid), "ASIInitCamera")
 
-        self._check(
-            sys.ASISetControlValue(cid, ASI_EXPOSURE, exposure_us, ASI_FALSE),
-            "ASISetControlValue(EXPOSURE)",
-        )
-        self._check(
-            sys.ASISetControlValue(cid, ASI_GAIN, gain, ASI_FALSE),
-            "ASISetControlValue(GAIN)",
-        )
-        self._exposure_us = exposure_us
-        self._gain = gain
+            self._check(
+                sys.ASISetControlValue(cid, ASI_EXPOSURE, exposure_us, ASI_FALSE),
+                "ASISetControlValue(EXPOSURE)",
+            )
+            self._check(
+                sys.ASISetControlValue(cid, ASI_GAIN, gain, ASI_FALSE),
+                "ASISetControlValue(GAIN)",
+            )
+            self._exposure_us = exposure_us
+            self._gain = gain
 
-        self._check(
-            sys.ASISetROIFormat(cid, width, height, 1, ASI_IMG_RAW8),
-            "ASISetROIFormat",
-        )
+            self._check(
+                sys.ASISetROIFormat(cid, width, height, 1, ASI_IMG_RAW8),
+                "ASISetROIFormat",
+            )
 
-        self._check(sys.ASIStartVideoCapture(cid), "ASIStartVideoCapture")
+            self._check(sys.ASIStartVideoCapture(cid), "ASIStartVideoCapture")
+        except Exception:
+            sys.ASICloseCamera(cid)
+            raise
         self._opened = True
         print(f"[ZWO] Video capture started: {width}x{height}, "
               f"exposure={exposure_us}us, gain={gain}")

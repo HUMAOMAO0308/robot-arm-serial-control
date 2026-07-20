@@ -183,134 +183,141 @@ def main() -> int:
     print(f"  Method: {args.method}")
     print(f"{'='*55}\n")
 
-    for idx, joints in enumerate(HAND_EYE_POSES):
-        print(f"--- Pose {idx + 1}/{n_poses} ---")
-        print(f"  Joints: [{', '.join(f'{j:.1f}' for j in joints)}]")
+    scan_error = False
+    try:
+        for idx, joints in enumerate(HAND_EYE_POSES):
+            print(f"--- Pose {idx + 1}/{n_poses} ---")
+            print(f"  Joints: [{', '.join(f'{j:.1f}' for j in joints)}]")
 
-        # Move robot
-        cmd = format_move(joints, args.speed)
-        send_command(ser, cmd, f"Move to pose {idx+1}")
-        print(f"  Settling for {args.settle_time:.1f}s...")
-        time.sleep(args.settle_time)
+            # Move robot
+            cmd = format_move(joints, args.speed)
+            send_command(ser, cmd, f"Move to pose {idx+1}")
+            print(f"  Settling for {args.settle_time:.1f}s...")
+            time.sleep(args.settle_time)
 
-        # Capture frame
-        frame = cam.grab_frame()
-        img_path = images_dir / f"pose_{idx:02d}.png"
-        cv2.imwrite(str(img_path), frame)
+            # Capture frame
+            frame = cam.grab_frame()
+            img_path = images_dir / f"pose_{idx:02d}.png"
+            cv2.imwrite(str(img_path), frame)
 
-        # Detect chessboard
-        if frame.ndim == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = frame
+            # Detect chessboard
+            if frame.ndim == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
 
-        ret, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
-        if not ret:
-            print(f"  [FAIL] Chessboard not detected in pose {idx+1} -- skipped")
-            continue
+            ret, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
+            if not ret:
+                print(f"  [FAIL] Chessboard not detected in pose {idx+1} -- skipped")
+                continue
 
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-        corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+            corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
 
-        # solvePnP: board in camera frame
-        ok, rvec, tvec = cv2.solvePnP(
-            objp, corners_refined, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE,
-        )
-        if not ok:
-            print(f"  [FAIL] solvePnP failed for pose {idx+1} -- skipped")
-            continue
+            # solvePnP: board in camera frame
+            ok, rvec, tvec = cv2.solvePnP(
+                objp, corners_refined, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            if not ok:
+                print(f"  [FAIL] solvePnP failed for pose {idx+1} -- skipped")
+                continue
 
-        R_board2cam, _ = cv2.Rodrigues(rvec)
-        t_board2cam = tvec.reshape(3)
+            R_board2cam, _ = cv2.Rodrigues(rvec)
+            t_board2cam = tvec.reshape(3)
 
-        # Compute reprojection error
-        projected, _ = cv2.projectPoints(objp, rvec, tvec, camera_matrix, dist_coeffs)
-        reproj_err = cv2.norm(corners_refined, projected, cv2.NORM_L2) / np.sqrt(len(corners_refined))
+            # Compute reprojection error
+            projected, _ = cv2.projectPoints(objp, rvec, tvec, camera_matrix, dist_coeffs)
+            reproj_err = cv2.norm(corners_refined, projected, cv2.NORM_L2) / np.sqrt(len(corners_refined))
 
-        # FK: base to ee
-        T_ee_in_base = forward_kinematics(joints)
-        R_b2e, t_b2e = pose_to_rt(T_ee_in_base)
+            # FK: base to ee
+            T_ee_in_base = forward_kinematics(joints)
+            R_b2e, t_b2e = pose_to_rt(T_ee_in_base)
 
-        R_base_to_ee_list.append(R_b2e)
-        t_base_to_ee_list.append(t_b2e)
-        R_board_to_cam_list.append(R_board2cam)
-        t_board_to_cam_list.append(t_board2cam)
+            R_base_to_ee_list.append(R_b2e)
+            t_base_to_ee_list.append(t_b2e)
+            R_board_to_cam_list.append(R_board2cam)
+            t_board_to_cam_list.append(t_board2cam)
 
-        record = PoseRecord(
-            index=idx,
-            joints=joints,
-            R_base_to_ee=R_b2e.tolist(),
-            t_base_to_ee=t_b2e.tolist(),
-            R_board_to_cam=R_board2cam.tolist(),
-            t_board_to_cam=t_board2cam.tolist(),
-            reprojection_error=round(reproj_err, 4),
-            image_path=str(img_path),
-        )
-        records.append(record)
-        print(f"  [OK] Chessboard detected, reprojection error: {reproj_err:.4f} px")
+            record = PoseRecord(
+                index=idx,
+                joints=joints,
+                R_base_to_ee=R_b2e.tolist(),
+                t_base_to_ee=t_b2e.tolist(),
+                R_board_to_cam=R_board2cam.tolist(),
+                t_board_to_cam=t_board2cam.tolist(),
+                reprojection_error=round(reproj_err, 4),
+                image_path=str(img_path),
+            )
+            records.append(record)
+            print(f"  [OK] Chessboard detected, reprojection error: {reproj_err:.4f} px")
+    except Exception as e:
+        print(f"[ERROR] Calibration loop failed: {e}", file=sys.stderr)
+        import traceback; traceback.print_exc()
+        scan_error = True
 
     print(f"\n[INFO] Valid poses collected: {len(R_base_to_ee_list)} / {n_poses}")
 
     if len(R_base_to_ee_list) < 8:
         print("[ERROR] Need at least 8 valid poses for hand-eye calibration")
-        ser.close()
-        cam.close()
-        return 1
+        can_solve = False
+    else:
+        can_solve = not scan_error
 
     # --- Solve hand-eye ---
-    method_map = {
-        "tsai": cv2.CALIB_HAND_EYE_TSAI,
-        "park": cv2.CALIB_HAND_EYE_PARK,
-        "horaud": cv2.CALIB_HAND_EYE_HORAUD,
-        "andreff": cv2.CALIB_HAND_EYE_ANDREFF,
-        "danillidis": cv2.CALIB_HAND_EYE_DANIILIDIS,
-    }
+    if can_solve:
+        method_map = {
+            "tsai": cv2.CALIB_HAND_EYE_TSAI,
+            "park": cv2.CALIB_HAND_EYE_PARK,
+            "horaud": cv2.CALIB_HAND_EYE_HORAUD,
+            "andreff": cv2.CALIB_HAND_EYE_ANDREFF,
+            "danillidis": cv2.CALIB_HAND_EYE_DANIILIDIS,
+        }
 
-    print(f"\n[INFO] Solving hand-eye calibration ({args.method})...")
-    R_cam2ee, t_cam2ee = cv2.calibrateHandEye(
-        R_base_to_ee_list, t_base_to_ee_list,
-        R_board_to_cam_list, t_board_to_cam_list,
-        method=method_map[args.method],
-    )
+        print(f"\n[INFO] Solving hand-eye calibration ({args.method})...")
+        R_cam2ee, t_cam2ee = cv2.calibrateHandEye(
+            R_base_to_ee_list, t_base_to_ee_list,
+            R_board_to_cam_list, t_board_to_cam_list,
+            method=method_map[args.method],
+        )
 
-    T_cam_to_ee = np.eye(4)
-    T_cam_to_ee[:3, :3] = R_cam2ee
-    T_cam_to_ee[:3, 3] = t_cam2ee.ravel()
+        T_cam_to_ee = np.eye(4)
+        T_cam_to_ee[:3, :3] = R_cam2ee
+        T_cam_to_ee[:3, 3] = t_cam2ee.ravel()
 
-    print("\n" + "=" * 55)
-    print("  HAND-EYE CALIBRATION RESULT")
-    print("  Camera → End-Effector transform (T_cam_to_ee):")
-    print("=" * 55)
-    print()
-    for row in T_cam_to_ee:
-        print(f"  [{row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f}, {row[3]:.6f}]")
-    print()
-    print(f"  Translation: ({t_cam2ee[0,0]:.4f}, {t_cam2ee[1,0]:.4f}, {t_cam2ee[2,0]:.4f}) meters")
-    print(f"  (i.e., camera is {t_cam2ee[0,0]*1000:.1f}, {t_cam2ee[1,0]*1000:.1f}, "
-          f"{t_cam2ee[2,0]*1000:.1f} mm from end-effector flange)")
+        print("\n" + "=" * 55)
+        print("  HAND-EYE CALIBRATION RESULT")
+        print("  Camera → End-Effector transform (T_cam_to_ee):")
+        print("=" * 55)
+        print()
+        for row in T_cam_to_ee:
+            print(f"  [{row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f}, {row[3]:.6f}]")
+        print()
+        print(f"  Translation: ({t_cam2ee[0,0]:.4f}, {t_cam2ee[1,0]:.4f}, {t_cam2ee[2,0]:.4f}) meters")
+        print(f"  (i.e., camera is {t_cam2ee[0,0]*1000:.1f}, {t_cam2ee[1,0]*1000:.1f}, "
+              f"{t_cam2ee[2,0]*1000:.1f} mm from end-effector flange)")
 
-    # --- Save results ---
-    result = {
-        "method": args.method,
-        "num_poses_used": len(R_base_to_ee_list),
-        "num_poses_attempted": n_poses,
-        "T_cam_to_ee": {
-            "rotation": R_cam2ee.tolist(),
-            "translation": t_cam2ee.ravel().tolist(),
-            "matrix_4x4": T_cam_to_ee.tolist(),
-        },
-        "pose_records": [asdict(r) for r in records],
-        "camera_intrinsics_source": str(args.intrinsics.resolve()),
-        "chessboard": {
-            "internal_corners": list(CHESSBOARD_SIZE),
-            "square_size_mm": square_size,
-        },
-    }
+        # --- Save results ---
+        result = {
+            "method": args.method,
+            "num_poses_used": len(R_base_to_ee_list),
+            "num_poses_attempted": n_poses,
+            "T_cam_to_ee": {
+                "rotation": R_cam2ee.tolist(),
+                "translation": t_cam2ee.ravel().tolist(),
+                "matrix_4x4": T_cam_to_ee.tolist(),
+            },
+            "pose_records": [asdict(r) for r in records],
+            "camera_intrinsics_source": str(args.intrinsics.resolve()),
+            "chessboard": {
+                "internal_corners": list(CHESSBOARD_SIZE),
+                "square_size_mm": square_size,
+            },
+        }
 
-    result_path = output_dir / "hand_eye_result.json"
-    with result_path.open("w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    print(f"\n[SAVE] {result_path}")
+        result_path = output_dir / "hand_eye_result.json"
+        with result_path.open("w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        print(f"\n[SAVE] {result_path}")
 
     # --- Cleanup ---
     # Return to safe pose

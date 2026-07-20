@@ -16,6 +16,8 @@ JOINT_LIMITS = {
     6: (-720, 720, "J6 末端旋转"),
 }
 
+_viz_process: subprocess.Popen | None = None
+
 
 def _clear() -> None:
     print("\033[2J\033[H", end="")
@@ -85,7 +87,8 @@ def run_scan_arc() -> None:
     speed = ask("速度", default=50, cast=int)
     pause = ask("每位姿停留秒数", default=1.0, cast=float)
     delay = ask("到位后延迟拍照秒数", default=0.3, cast=float)
-    out = ask("输出目录", default="scans/quick", cast=str)
+    out = ask("输出父目录", default="scans", cast=str)
+    name = ask("扫描名称（留空=自动时间戳）", default="", cast=str)
     intrinsics = ask("内参 JSON 路径（留空=跳过）", default=None)
     fk = _confirm("每帧计算 FK 末端位姿？")
 
@@ -96,6 +99,8 @@ def run_scan_arc() -> None:
         "--pause-time", str(pause), "--capture-delay", str(delay),
         "--output-dir", out,
     ]
+    if name:
+        cmd += ["--name", name]
     if start is not None:
         cmd += ["--start-angle", str(start)]
     if end is not None:
@@ -117,7 +122,8 @@ def run_scan_hemisphere() -> None:
     speed = ask("速度", default=50, cast=int)
     pause = ask("每位姿停留秒数", default=1.0, cast=float)
     delay = ask("到位后延迟拍照秒数", default=0.3, cast=float)
-    out = ask("输出目录", default="scans/hemisphere", cast=str)
+    out = ask("输出父目录", default="scans", cast=str)
+    name = ask("扫描名称（留空=自动时间戳）", default="", cast=str)
     intrinsics = ask("内参 JSON 路径（留空=跳过）", default=None)
     fk = _confirm("每帧计算 FK 末端位姿？")
 
@@ -130,6 +136,8 @@ def run_scan_hemisphere() -> None:
         "--pause-time", str(pause), "--capture-delay", str(delay),
         "--output-dir", out,
     ]
+    if name:
+        cmd += ["--name", name]
     if intrinsics:
         cmd += ["--intrinsics", intrinsics]
     if fk:
@@ -143,7 +151,8 @@ def run_scan_file() -> None:
     speed = ask("速度", default=50, cast=int)
     pause = ask("每位姿停留秒数", default=1.0, cast=float)
     delay = ask("到位后延迟拍照秒数", default=0.3, cast=float)
-    out = ask("输出目录", default="scans/custom", cast=str)
+    out = ask("输出父目录", default="scans", cast=str)
+    name = ask("扫描名称（留空=自动时间戳）", default="", cast=str)
     intrinsics = ask("内参 JSON 路径（留空=跳过）", default=None)
     fk = _confirm("每帧计算 FK 末端位姿？")
 
@@ -154,6 +163,8 @@ def run_scan_file() -> None:
         "--pause-time", str(pause), "--capture-delay", str(delay),
         "--output-dir", out,
     ]
+    if name:
+        cmd += ["--name", name]
     if intrinsics:
         cmd += ["--intrinsics", intrinsics]
     if fk:
@@ -217,6 +228,24 @@ def show_limits() -> None:
     for j in range(1, 7):
         lo, hi, label = JOINT_LIMITS[j]
         print(f"  J{j}      {lo:>6}°   {hi:>6}°   {label}")
+    _wait()
+
+
+def run_visual_control() -> None:
+    """Start the Three.js visual control web server."""
+    global _viz_process
+    if _viz_process is not None and _viz_process.poll() is None:
+        print("  [INFO] Visual server already running at http://127.0.0.1:8765")
+        _wait()
+        return
+
+    _header("可视化控制")
+    print()
+    print("  Launching 3D visual control in browser ...")
+    cmd = [sys.executable, str(SCRIPT_DIR / "visual_server.py")]
+    _viz_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("  Server started → http://127.0.0.1:8765")
+    print("  Open this URL in your browser if it doesn't open automatically.")
     _wait()
 
 
@@ -303,12 +332,13 @@ def main_menu() -> None:
         print("  ║   ────────────────────────────────────           ║")
         print("  ║   3. 查看关节限制                                  ║")
         print("  ║   4. 帮助                                         ║")
+        print("  ║   5. 可视化控制    (3D Web 视图 + 滑块)            ║")
         print("  ║   0. 退出                                         ║")
         print("  ║                                                  ║")
         print("  ╚══════════════════════════════════════════════════╝")
         print()
         try:
-            ch = input("  请选择 [1/2/3/4/0]: ").strip()
+            ch = input("  请选择 [1/2/3/4/5/0]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n  再见!")
             return
@@ -320,6 +350,8 @@ def main_menu() -> None:
             show_limits()
         elif ch == "4":
             show_help()
+        elif ch == "5":
+            run_visual_control()
         elif ch == "0":
             print("\n  再见!")
             break

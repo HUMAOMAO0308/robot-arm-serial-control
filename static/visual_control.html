@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DummyRobot Visual Control</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        overflow: hidden;
+        color: #eee;
+        font-family: Arial, sans-serif;
+        background: #1a1a2e;
+      }
+      #container {
+        width: 100vw;
+        height: calc(100vh - 160px);
+      }
+      #panel {
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: center;
+        height: 160px;
+        padding: 8px 12px;
+        background: #16213e;
+        border-top: 2px solid #0f3460;
+      }
+      .slider-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-width: 90px;
+        padding: 6px 10px;
+        background: #1a1a2e;
+        border-radius: 8px;
+      }
+      .slider-group label {
+        margin-bottom: 2px;
+        font-weight: bold;
+        font-size: 15px;
+      }
+      .slider-group .val {
+        color: #e94560;
+        font-weight: bold;
+        font-size: 18px;
+      }
+      .slider-group input[type="range"] {
+        width: 80px;
+        direction: ltr;
+        writing-mode: horizontal-tb;
+      }
+      #btn-row {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        z-index: 10;
+        display: flex;
+        gap: 10px;
+        transform: translateX(-50%);
+      }
+      #btn-row button {
+        padding: 8px 18px;
+        color: #fff;
+        font-weight: bold;
+        font-size: 14px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #btn-r {
+        background: #e94560;
+      }
+      #btn-r:hover {
+        background: #c23152;
+      }
+      #btn-h {
+        background: #0f3460;
+      }
+      #btn-send {
+        background: #2d6a4f;
+      }
+      #btn-conn {
+        background: #d4a017;
+      }
+      #btn-read {
+        background: #4a4e69;
+      }
+      #status {
+        position: fixed;
+        top: 12px;
+        right: 16px;
+        z-index: 10;
+        color: #888;
+        font-size: 14px;
+      }
+      #title {
+        position: fixed;
+        top: 12px;
+        left: 16px;
+        z-index: 10;
+        color: #e94560;
+        font-weight: bold;
+        font-size: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+    <div id="title">DummyRobot Visual Control</div>
+    <div id="status">Offline (FK preview)</div>
+    <div id="btn-row">
+      <button id="btn-conn" onclick="toggleConnect()">Connect</button>
+      <button id="btn-h" onclick="home()">Home</button>
+      <button id="btn-send" onclick="sendAll()">Send</button>
+      <button id="btn-read" onclick="readJoints()">Read</button>
+      <button id="btn-r" onclick="resetPose()">Reset</button>
+    </div>
+    <div id="panel"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.174.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { STLLoader } from "three/addons/loaders/STLLoader.js";
+
+      // ── FK parameters from robot_kinematics.py ──
+      const JOINT_ORIGINS = [
+        [-0.019225, -0.000523, 0.100684],
+        [-0.0155, 0.035, 0.0285],
+        [0.03665, 0.0, 0.146],
+        [-0.01855, -0.01, 0.052],
+        [0.0168, 0.127, 0.0],
+        [-0.018506, 0.077, -0.000106],
+      ];
+      const JOINT_AXES = [
+        [0, 0, -1],
+        [-1, 0, 0],
+        [-1, 0, 0],
+        [0, -1, 0],
+        [-1, 0, 0],
+        [0, -1, 0],
+      ];
+      const T_WB = new THREE.Matrix4().set(
+        -1,
+        0,
+        0,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1
+      );
+      const VISUAL_ORIGINS = [
+        [0, 0, 0],
+        [0.019225, 0.000523, -0.100684],
+        [0.034725, -0.034477, -0.129184],
+        [-0.001925, -0.034477, -0.275184],
+        [0.016625, -0.024477, -0.327184],
+        [-0.000175, -0.151477, -0.327184],
+        [0.018331, -0.228477, -0.327078],
+      ];
+      const MESH_NAMES = [
+        "base_link",
+        "link1_1_1",
+        "link2_1_1",
+        "link3_1_1",
+        "link4_1_1",
+        "link5_1_1",
+        "link6_1_1",
+      ];
+      const SCALE = 0.001;
+
+      let joints = [0, -73, 180, 0, 0, 0];
+      let connected = false;
+      let meshObjs = [];
+
+      function rodrigues(axis, ang) {
+        const c = Math.cos(ang),
+          s = Math.sin(ang),
+          v = 1 - c;
+        const [x, y, z] = axis;
+        return new THREE.Matrix4().set(
+          c + v * x * x,
+          v * x * y - s * z,
+          v * x * z + s * y,
+          0,
+          v * y * x + s * z,
+          c + v * y * y,
+          v * y * z - s * x,
+          0,
+          v * z * x - s * y,
+          v * z * y + s * x,
+          c + v * z * z,
+          0,
+          0,
+          0,
+          0,
+          1
+        );
+      }
+
+      function fk(j) {
+        let T = T_WB.clone();
+        for (let i = 0; i < 6; i++) {
+          const R = rodrigues(JOINT_AXES[i], (j[i] * Math.PI) / 180);
+          const Ti = new THREE.Matrix4().copy(R);
+          Ti.elements[12] = JOINT_ORIGINS[i][0];
+          Ti.elements[13] = JOINT_ORIGINS[i][1];
+          Ti.elements[14] = JOINT_ORIGINS[i][2];
+          T.multiply(Ti);
+        }
+        return T;
+      }
+
+      function fkChain(j) {
+        let T = T_WB.clone();
+        const poses = [T.clone()];
+        for (let i = 0; i < 6; i++) {
+          const R = rodrigues(JOINT_AXES[i], (j[i] * Math.PI) / 180);
+          const Ti = new THREE.Matrix4().copy(R);
+          Ti.elements[12] = JOINT_ORIGINS[i][0];
+          Ti.elements[13] = JOINT_ORIGINS[i][1];
+          Ti.elements[14] = JOINT_ORIGINS[i][2];
+          T.multiply(Ti);
+          poses.push(T.clone());
+        }
+        return poses;
+      }
+
+      // ── Three.js scene ──
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1a2e);
+
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 5);
+      camera.position.set(0.3, 0.25, 0.3);
+      camera.lookAt(0, 0.08, 0);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.2;
+      document.getElementById("container").appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, 0.08, 0);
+      controls.update();
+      controls.enableDamping = true;
+
+      // Lights
+      const ambient = new THREE.AmbientLight(0xffffff, 2.0);
+      scene.add(ambient);
+      const dir = new THREE.DirectionalLight(0xffffff, 3.0);
+      dir.position.set(1, 2, 1.5);
+      dir.castShadow = true;
+      dir.shadow.mapSize.set(512, 512);
+      scene.add(dir);
+      const hemi = new THREE.HemisphereLight(0x88ccff, 0x444444, 1.5);
+      scene.add(hemi);
+
+      // Ground grid
+      const gridHelper = new THREE.GridHelper(0.5, 12, 0x444466, 0x222244);
+      gridHelper.position.y = -0.035;
+      scene.add(gridHelper);
+
+      // Ground plane (shadow receiver)
+      const groundGeo = new THREE.PlaneGeometry(1.0, 1.0);
+      const groundMat = new THREE.MeshPhongMaterial({
+        color: 0x222244,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+      });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.036;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // ── Load STL meshes ──
+      const loader = new STLLoader();
+      const meshMatBase = new THREE.MeshPhongMaterial({
+        color: 0x808090,
+        specular: 0x222222,
+        shininess: 15,
+        flatShading: false,
+      });
+      const meshMatLink = new THREE.MeshPhongMaterial({
+        color: 0xa0a0b0,
+        specular: 0x333333,
+        shininess: 20,
+        flatShading: false,
+      });
+
+      async function loadMeshes() {
+        const group = new THREE.Group();
+        for (let i = 0; i < 7; i++) {
+          const geo = await loader.loadAsync(MESH_NAMES[i] + ".stl");
+          geo.scale(SCALE, SCALE, SCALE);
+          geo.computeVertexNormals();
+          const mat = i === 0 ? meshMatBase : meshMatLink;
+          const mesh = new THREE.Mesh(geo, mat.clone());
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          group.add(mesh);
+          meshObjs.push(mesh);
+        }
+        scene.add(group);
+        updatePoses();
+        document.getElementById("status").textContent = "Offline (FK preview)";
+      }
+      loadMeshes();
+
+      // Coordinate convert: URDF (Z-up) → Three.js (Y-up)
+      // URDF(x,y,z) → Three.js(x, z, y)
+      const URDF_TO_THREE = new THREE.Matrix4().set(
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      );
+
+      function updatePoses() {
+        const poses = fkChain(joints);
+        for (let i = 0; i < 7; i++) {
+          const m = poses[i];
+          const vo = VISUAL_ORIGINS[i];
+          const mat = new THREE.Matrix4().copy(m);
+          mat.elements[12] +=
+            vo[0] * mat.elements[0] +
+            vo[1] * mat.elements[4] +
+            vo[2] * mat.elements[8];
+          mat.elements[13] +=
+            vo[0] * mat.elements[1] +
+            vo[1] * mat.elements[5] +
+            vo[2] * mat.elements[9];
+          mat.elements[14] +=
+            vo[0] * mat.elements[2] +
+            vo[1] * mat.elements[6] +
+            vo[2] * mat.elements[10];
+          meshObjs[i].matrix.copy(URDF_TO_THREE.clone().multiply(mat));
+          meshObjs[i].matrixAutoUpdate = false;
+        }
+      }
+
+      // ── Sliders ──
+      const panel = document.getElementById("panel");
+      for (let i = 0; i < 6; i++) {
+        const g = document.createElement("div");
+        g.className = "slider-group";
+        const lbl = document.createElement("label");
+        lbl.textContent = "J" + (i + 1);
+        g.appendChild(lbl);
+        const inp = document.createElement("input");
+        inp.type = "range";
+        inp.min = -180;
+        inp.max = 180;
+        inp.step = 0.5;
+        inp.value = joints[i];
+        inp.addEventListener("input", () => {
+          joints[i] = parseFloat(inp.value);
+          document.getElementById("jv" + i).textContent =
+            joints[i].toFixed(1) + "°";
+          updatePoses();
+        });
+        g.appendChild(inp);
+        const val = document.createElement("div");
+        val.className = "val";
+        val.id = "jv" + i;
+        val.textContent = joints[i].toFixed(1) + "°";
+        g.appendChild(val);
+        panel.appendChild(g);
+      }
+
+      // ── API ──
+      const BASE = "";
+      async function api(path) {
+        const r = await fetch(BASE + path);
+        return r.json();
+      }
+
+      window.toggleConnect = async function () {
+        if (connected) {
+          await api("/api/disable");
+          document.getElementById("status").textContent =
+            "Offline (FK preview)";
+          document.getElementById("btn-conn").textContent = "Connect";
+          connected = false;
+        } else {
+          await api("/api/connect");
+          document.getElementById("status").textContent = "Connected";
+          document.getElementById("btn-conn").textContent = "Disconnect";
+          connected = true;
+        }
+      };
+
+      window.home = async function () {
+        await fetch("/api/home");
+        setTimeout(readJoints, 3000);
+      };
+
+      window.sendAll = async function () {
+        for (let i = 0; i < 6; i++) {
+          await fetch("/api/move?j=" + i + "&v=" + joints[i] + "&s=50");
+        }
+      };
+
+      window.readJoints = async function () {
+        try {
+          const d = await api("/api/joints");
+          if (d.joints) {
+            joints = d.joints;
+            for (let i = 0; i < 6; i++) {
+              document.querySelectorAll(".slider-group input")[i].value =
+                joints[i];
+              document.getElementById("jv" + i).textContent =
+                joints[i].toFixed(1) + "°";
+            }
+            updatePoses();
+          }
+        } catch (e) {}
+      };
+
+      window.resetPose = function () {
+        joints = [0, -73, 180, 0, 0, 0];
+        for (let i = 0; i < 6; i++) {
+          document.querySelectorAll(".slider-group input")[i].value = joints[i];
+          document.getElementById("jv" + i).textContent =
+            joints[i].toFixed(1) + "°";
+        }
+        updatePoses();
+      };
+
+      // ── Render ──
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect =
+          document.getElementById("container").clientWidth /
+          document.getElementById("container").clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(
+          document.getElementById("container").clientWidth,
+          document.getElementById("container").clientHeight
+        );
+      });
+      // Trigger initial resize
+      setTimeout(() => window.dispatchEvent(new Event("resize")), 100);
+    </script>
+  </body>
+</html>

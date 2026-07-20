@@ -419,28 +419,47 @@
 
       window.toggleConnect = async function () {
         if (connected) {
-          await api("/api/disable");
+          await api("/api/disconnect");
           document.getElementById("status").textContent =
             "Offline (FK preview)";
           document.getElementById("btn-conn").textContent = "Connect";
           connected = false;
         } else {
-          await api("/api/connect");
+          try {
+            const r = await api("/api/connect");
+            if (!r.ok) {
+              alert("Connection failed: " + (r.error || "unknown"));
+              return;
+            }
+          } catch (e) {
+            alert("Connection failed: " + e.message);
+            return;
+          }
           document.getElementById("status").textContent = "Connected";
           document.getElementById("btn-conn").textContent = "Disconnect";
           connected = true;
+          setTimeout(readJoints, 500);
         }
       };
 
       window.home = async function () {
-        await fetch("/api/home");
-        setTimeout(readJoints, 3000);
+        try {
+          const r = await api("/api/home");
+          if (r.ok) setTimeout(readJoints, 3000);
+        } catch (e) {}
       };
 
       window.sendAll = async function () {
+        let failed = false;
         for (let i = 0; i < 6; i++) {
-          await fetch("/api/move?j=" + i + "&v=" + joints[i] + "&s=50");
+          try {
+            const r = await api("/api/move?j=" + i + "&v=" + joints[i] + "&s=50");
+            if (!r.ok) failed = true;
+          } catch (e) {
+            failed = true;
+          }
         }
+        if (failed) alert("Some joint moves failed — check connection");
       };
 
       window.readJoints = async function () {

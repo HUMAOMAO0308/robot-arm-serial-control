@@ -152,7 +152,8 @@ def run_compute(args: argparse.Namespace) -> int:
         print("[ERROR] Need ≥8 usable images."); return 1
 
     first = cv2.imread(str(image_paths[0]), cv2.IMREAD_GRAYSCALE)
-    first = first or cv2.imread(str(image_paths[1]), cv2.IMREAD_GRAYSCALE)
+    if first is None:
+        first = cv2.imread(str(image_paths[1]), cv2.IMREAD_GRAYSCALE)
     if first is None:
         print("[ERROR] Cannot determine image size."); return 1
     h, w = first.shape

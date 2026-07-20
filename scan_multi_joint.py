@@ -339,6 +339,7 @@ def main() -> int:
             speed=args.speed,
         )
     elif args.mode == "elevation":
+        print("[WARN] --mode elevation is equivalent to arc; use --mode arc instead")
         scan = generate_arc_scan(
             base_joints, args.joint - 1,
             start_angle=args.start_angle,

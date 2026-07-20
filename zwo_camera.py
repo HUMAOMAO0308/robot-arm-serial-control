@@ -20,7 +20,7 @@ ASI_IMG_RAW8 = 0
 DEFAULT_SDK_PATH = os.environ.get(
     "ASI_SDK_PATH",
     os.path.realpath(
-        "/home/hu/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so"
+        os.path.expanduser("~/桌面/ASI_linux_mac_SDK_V1.41/lib/x64/libASICamera2.so")
     ),
 )
 
@@ -304,6 +304,8 @@ class ZwoCamera:
     # ------------------------------------------------------------------
     def grab_frame(self) -> np.ndarray:
         """Grab a single RAW8 frame and return as a (H, W) uint8 array."""
+        if not self._opened:
+            raise RuntimeError("Camera is not opened — call open() first")
         buf_size = self._width * self._height
         buf = ctypes.create_string_buffer(buf_size)
         pbuf = ctypes.cast(buf, ctypes.c_void_p)

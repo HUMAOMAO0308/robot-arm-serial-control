@@ -31,12 +31,16 @@ def _get_robot(port: Optional[str]):
         print(f"[robot] Connected: {'virtual' if not port else port}")
         return r
     except Exception as e:
-        print(f"[robot] {e}, using virtual")
+        print(f"[robot] {e}, falling back to virtual")
         from sdk import VirtualDummyRobot
-        r = VirtualDummyRobot()
-        r.connect()
-        r.enable()
-        return r
+        try:
+            r = VirtualDummyRobot()
+            r.connect()
+            r.enable()
+            return r
+        except Exception as e2:
+            print(f"[robot] Virtual also failed: {e2}")
+            raise RuntimeError(f"Failed to create robot: {e2}") from e2
 
 
 # ---------------------------------------------------------------------------
@@ -77,20 +81,50 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
         elif path == "/api/status":
             self._json_response(self._status())
         elif path == "/api/connect":
-            self._connect_robot()
-            self._json_response({"ok": True})
+            try:
+                self._connect_robot()
+                self._json_response({"ok": True})
+            except Exception as e:
+                self._json_response({"ok": False, "error": str(e)})
         elif path.startswith("/api/move"):
             self._handle_move(parsed)
         elif path == "/api/home":
-            self._home()
-            self._json_response({"ok": True})
+            try:
+                self._home()
+            except Exception as e:
+                self._json_response({"ok": False, "error": str(e)})
+            else:
+                self._json_response({"ok": True})
         elif path == "/api/enable":
-            if self.robot:
-                self.robot.enable()
-            self._json_response({"ok": True})
+            try:
+                with self._lock:
+                    if self.robot is None:
+                        raise RuntimeError("Robot not connected")
+                    self.robot.enable()
+                self._json_response({"ok": True})
+            except Exception as e:
+                self._json_response({"ok": False, "error": str(e)})
         elif path == "/api/disable":
-            if self.robot:
-                self.robot.disable()
+            try:
+                with self._lock:
+                    if self.robot is None:
+                        raise RuntimeError("Robot not connected")
+                    self.robot.disable()
+                self._json_response({"ok": True})
+            except Exception as e:
+                self._json_response({"ok": False, "error": str(e)})
+        elif path == "/api/disconnect":
+            with self._lock:
+                if self.robot:
+                    try:
+                        self.robot.disable()
+                    except Exception:
+                        pass
+                    try:
+                        self.robot.disconnect()
+                    except Exception:
+                        pass
+                    self.robot = None
             self._json_response({"ok": True})
         else:
             super().do_GET()
@@ -131,14 +165,18 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
             value = float(qs.get("v", ["0"])[0])
             speed = float(qs.get("s", ["50"])[0])
             with self._lock:
-                if self.robot:
-                    self.robot.move_single_joint(index, target=value, speed=speed)
+                if self.robot is None:
+                    self._json_response({"ok": False, "error": "Robot not connected"})
+                    return
+                self.robot.move_single_joint(index, target=value, speed=speed)
             self._json_response({"ok": True})
         except Exception as e:
             self._json_response({"ok": False, "error": str(e)})
 
     def _home(self):
-        if self.robot:
+        with self._lock:
+            if self.robot is None:
+                raise RuntimeError("Robot not connected")
             self.robot.home()
 
 
@@ -160,7 +198,9 @@ def run_server(port: int, robot_port: Optional[str]):
     print(f"  Visual Control → http://127.0.0.1:{port}")
     print(f"  ========================================\n")
 
-    threading.Timer(0.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    t = threading.Timer(0.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}"))
+    t.daemon = True
+    t.start()
 
     try:
         server.serve_forever()

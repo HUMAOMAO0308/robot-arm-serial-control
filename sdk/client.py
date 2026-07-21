@@ -266,4 +266,5 @@ class DummyRobot:
 
     @staticmethod
     def _format_number(value: Union[int, float]) -> str:
-        return format(float(value), "g")
+        s = f"{float(value):.4f}".rstrip("0").rstrip(".")
+        return s or "0"

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from math import cos, radians, sin
+from pathlib import Path
+import sys
 from typing import List, Optional, Sequence
 import time
 
+import numpy as np
+
 from .exceptions import DummyRobotCommandError
 from .types import JOINT_COUNT, JointPositions, Pose6D
+
+_PARENT = Path(__file__).resolve().parent.parent
+if str(_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PARENT))
+
+import robot_kinematics  # noqa: E402
 
 
 class VirtualDummyRobot:
@@ -79,14 +89,39 @@ class VirtualDummyRobot:
         self, x: float, y: float, z: float, a: float, b: float, c: float, speed: Optional[float] = None
     ) -> str:
         self._require_connected()
-        self._joints[0] = max(-180.0, min(180.0, a))
-        self._joints[1] = max(-180.0, min(180.0, b * 0.5))
-        self._joints[2] = max(-180.0, min(180.0, c * 0.5))
-        self._joints[3] = max(-180.0, min(180.0, a * 0.25))
-        self._joints[4] = max(-180.0, min(180.0, b * 0.5))
-        self._joints[5] = max(-180.0, min(180.0, c * 0.5))
+        roll, pitch, yaw = radians(a), radians(b), radians(c)
+        Rx = np.array([
+            [1, 0, 0],
+            [0, cos(roll), -sin(roll)],
+            [0, sin(roll), cos(roll)],
+        ])
+        Ry = np.array([
+            [cos(pitch), 0, sin(pitch)],
+            [0, 1, 0],
+            [-sin(pitch), 0, cos(pitch)],
+        ])
+        Rz = np.array([
+            [cos(yaw), -sin(yaw), 0],
+            [sin(yaw), cos(yaw), 0],
+            [0, 0, 1],
+        ])
+        R_target = Rz @ Ry @ Rx
+        T_target = np.eye(4)
+        T_target[:3, :3] = R_target
+        T_target[:3, 3] = [x / 1000.0, y / 1000.0, z / 1000.0]
+
+        ik_result = robot_kinematics.inverse_kinematics(
+            T_target, initial_joints=list(self._joints),
+            max_iters=200, alpha=0.2,
+        )
+        if ik_result is None:
+            raise DummyRobotCommandError(
+                f"Virtual IK failed to converge for pose ({x:.1f},{y:.1f},{z:.1f})"
+            )
+
+        self._joints = [max(-180.0, min(180.0, float(v))) for v in ik_result]
         self._updated_at = time.time()
-        return self._respond(f"ok @{x:g},{y:g},{z:g},{a:g},{b:g},{c:g}")
+        return self._respond(f"ok @{x:.4f},{y:.4f},{z:.4f},{a:.4f},{b:.4f},{c:.4f}")
 
     def move_to_joints(
         self,

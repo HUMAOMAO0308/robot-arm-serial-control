@@ -17,14 +17,17 @@
         background: #1a1a2e;
       }
       #container {
-        width: 100vw;
+        position: fixed;
+        left: 220px;
+        right: 0;
+        top: 0;
         height: calc(100vh - 160px);
       }
       #panel {
         position: fixed;
         right: 0;
         bottom: 0;
-        left: 0;
+        left: 220px;
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
@@ -34,6 +37,119 @@
         padding: 8px 12px;
         background: #16213e;
         border-top: 2px solid #0f3460;
+      }
+      #wp-panel {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 160px;
+        width: 220px;
+        background: #0d0d1a;
+        border-right: 2px solid #0f3460;
+        display: flex;
+        flex-direction: column;
+        z-index: 5;
+      }
+      #wp-panel h3 {
+        padding: 10px 12px 6px;
+        color: #e94560;
+        font-size: 14px;
+        border-bottom: 1px solid #0f3460;
+      }
+      #wp-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 6px;
+      }
+      .wp-item {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        padding: 3px 5px;
+        margin: 2px 0;
+        background: #16213e;
+        border-radius: 4px;
+        font-size: 11px;
+        color: #aaa;
+      }
+      .wp-item .wp-idx {
+        color: #e94560;
+        font-weight: bold;
+        min-width: 24px;
+      }
+      .wp-item .wp-angles {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .wp-item button {
+        padding: 2px 5px;
+        font-size: 10px;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        color: #fff;
+        min-width: 22px;
+        text-align: center;
+      }
+      .wp-go {
+        background: #2d6a4f;
+      }
+      .wp-go:hover {
+        background: #40916c;
+      }
+      .wp-del {
+        background: #6a2d2d;
+      }
+      .wp-del:hover {
+        background: #914040;
+      }
+      .wp-empty {
+        text-align: center;
+        color: #555;
+        font-size: 12px;
+        padding: 30px 10px;
+      }
+      #wp-actions {
+        padding: 6px 8px;
+        display: flex;
+        gap: 6px;
+        border-top: 1px solid #0f3460;
+      }
+      #wp-actions button {
+        flex: 1;
+        padding: 6px 0;
+        font-size: 12px;
+        font-weight: bold;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        color: #fff;
+      }
+      #btn-export {
+        background: #2d6a4f;
+      }
+      #btn-export:hover {
+        background: #40916c;
+      }
+      #btn-clear {
+        background: #6a2d2d;
+      }
+      #btn-clear:hover {
+        background: #914040;
+      }
+      #btn-stop {
+        background: #a93226;
+      }
+      #btn-stop:hover {
+        background: #cb4335;
+      }
+      #btn-rec-wp {
+        background: #d4a017;
+      }
+      #btn-rec-wp:hover {
+        background: #e67e22;
       }
       .slider-group {
         display: flex;
@@ -106,7 +222,7 @@
       #title {
         position: fixed;
         top: 12px;
-        left: 16px;
+        left: 230px;
         z-index: 10;
         color: #e94560;
         font-weight: bold;
@@ -118,11 +234,23 @@
     <div id="container"></div>
     <div id="title">DummyRobot Visual Control</div>
     <div id="status">Offline (FK preview)</div>
+    <div id="wp-panel">
+      <h3>📍 示教位姿 <span id="wp-count">0</span></h3>
+      <div id="wp-list">
+        <div class="wp-empty">暂无位姿<br>拖动滑块 → Send → Record 记录</div>
+      </div>
+      <div id="wp-actions">
+        <button id="btn-export" onclick="exportTrajectory()">导出JSON</button>
+        <button id="btn-clear" onclick="clearWaypoints()">清空</button>
+      </div>
+    </div>
     <div id="btn-row">
       <button id="btn-conn" onclick="toggleConnect()">Connect</button>
       <button id="btn-h" onclick="home()">Home</button>
       <button id="btn-send" onclick="sendAll()">Send</button>
+      <button id="btn-rec-wp" onclick="recordWaypoint()">Record</button>
       <button id="btn-read" onclick="readJoints()">Read</button>
+      <button id="btn-stop" onclick="stopRobot()">Stop</button>
       <button id="btn-r" onclick="resetPose()">Reset</button>
     </div>
     <div id="panel"></div>
@@ -450,16 +578,17 @@
       };
 
       window.sendAll = async function () {
-        let failed = false;
-        for (let i = 0; i < 6; i++) {
-          try {
-            const r = await api("/api/move?j=" + i + "&v=" + joints[i] + "&s=50");
-            if (!r.ok) failed = true;
-          } catch (e) {
-            failed = true;
+        try {
+          const qs = `j0=${joints[0]}&j1=${joints[1]}&j2=${joints[2]}&j3=${joints[3]}&j4=${joints[4]}&j5=${joints[5]}&s=50`;
+          const r = await api("/api/move_all?" + qs);
+          if (!r.ok) {
+            alert("Move failed: " + (r.error || "unknown"));
+            return;
           }
+          setTimeout(readJoints, 3000);
+        } catch (e) {
+          alert("Move failed: " + e.message);
         }
-        if (failed) alert("Some joint moves failed — check connection");
       };
 
       window.readJoints = async function () {
@@ -486,6 +615,93 @@
             joints[i].toFixed(1) + "°";
         }
         updatePoses();
+      };
+
+      // ── Teaching / waypoint operations ──
+      let waypoints = [];
+
+      function renderWaypointList() {
+        const list = document.getElementById("wp-list");
+        const count = document.getElementById("wp-count");
+        count.textContent = waypoints.length;
+        if (waypoints.length === 0) {
+          list.innerHTML =
+            '<div class="wp-empty">暂无位姿<br>拖动滑块 → Send → Record 记录</div>';
+          return;
+        }
+        list.innerHTML = "";
+        waypoints.forEach((wp, i) => {
+          const item = document.createElement("div");
+          item.className = "wp-item";
+          item.innerHTML = `
+            <span class="wp-idx">${i}</span>
+            <span class="wp-angles">[${wp.map(v=>v.toFixed(1)).join(",")}]</span>
+            <button class="wp-go" onclick="gotoWaypoint(${i})" title="Go">▶</button>
+            <button class="wp-del" onclick="deleteWaypoint(${i})" title="Delete">✕</button>
+          `;
+          list.appendChild(item);
+        });
+      }
+
+      window.recordWaypoint = async function () {
+        try {
+          const d = await api("/api/joints");
+          if (!d.joints) {
+            alert("Not connected to robot");
+            return;
+          }
+          waypoints.push(d.joints.map(v => parseFloat(v.toFixed(1))));
+          renderWaypointList();
+        } catch (e) {
+          alert("Read joints failed: " + e.message);
+        }
+      };
+
+      window.gotoWaypoint = function (idx) {
+        const wp = waypoints[idx];
+        const qs = wp.map((v, i) => `j${i}=${v}`).join("&") + "&s=50";
+        api("/api/move_all?" + qs).then(r => {
+          if (r && !r.ok) alert("Move failed: " + (r.error || ""));
+        }).catch(e => alert("Move failed: " + e.message));
+      };
+
+      window.deleteWaypoint = function (idx) {
+        waypoints.splice(idx, 1);
+        renderWaypointList();
+      };
+
+      window.exportTrajectory = function () {
+        if (waypoints.length === 0) {
+          alert("No waypoints to export");
+          return;
+        }
+        const data = {
+          waypoints: waypoints,
+          speeds: waypoints.map(() => 50),
+          labels: waypoints.map((_, i) => `wp_${i}`),
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: "application/json",
+        });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "teaching_trajectory.json";
+        a.click();
+      };
+
+      window.clearWaypoints = function () {
+        if (waypoints.length > 0 && !confirm("清空全部 " + waypoints.length + " 个位姿？")) return;
+        waypoints = [];
+        renderWaypointList();
+      };
+
+      window.stopRobot = async function () {
+        try {
+          const r = await api("/api/stop");
+          if (r && !r.ok) alert("Stop failed: " + (r.error || ""));
+        } catch (e) {
+          alert("Stop failed: " + e.message);
+        }
       };
 
       // ── Render ──

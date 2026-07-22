@@ -78,8 +78,6 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/joints":
             self._json_response(self._get_joints())
-        elif path == "/api/status":
-            self._json_response(self._status())
         elif path == "/api/connect":
             try:
                 self._connect_robot()
@@ -155,17 +153,7 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
                     return {"joints": jp.values, "connected": True}
                 except Exception:
                     pass
-        return {"joints": [0, 0, 0, 0, 0, 0], "connected": False}
-
-    def _status(self) -> dict:
-        with self._lock:
-            if self.robot:
-                try:
-                    jp = self.robot.get_joint_positions()
-                    return {"joints": jp.values, "connected": True, "is_connected": self.robot.is_connected}
-                except Exception:
-                    pass
-        return {"joints": [0, 0, 0, 0, 0, 0], "connected": False, "is_connected": False}
+        return {"joints": [0.0, 0.0, 90.0, 0.0, 0.0, 0.0], "connected": False}
 
     def _connect_robot(self):
         with self._lock:
@@ -185,12 +173,16 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
             index = int(qs.get("j", ["0"])[0]) + 1
             value = float(qs.get("v", ["0"])[0])
             speed = float(qs.get("s", ["50"])[0])
+            missing = False
             with self._lock:
                 if self.robot is None:
-                    self._json_response({"ok": False, "error": "Robot not connected"})
-                    return
-                self.robot.move_single_joint(index, target=value, speed=speed)
-            self._json_response({"ok": True})
+                    missing = True
+                else:
+                    self.robot.move_single_joint(index, target=value, speed=speed)
+            if missing:
+                self._json_response({"ok": False, "error": "Robot not connected"})
+            else:
+                self._json_response({"ok": True})
         except Exception as e:
             self._json_response({"ok": False, "error": str(e)})
 
@@ -202,12 +194,16 @@ class VisualAPIHandler(http.server.SimpleHTTPRequestHandler):
                 val = float(qs.get(f"j{ji}", ["0"])[0])
                 joints.append(val)
             speed = float(qs.get("s", ["50"])[0])
+            missing = False
             with self._lock:
                 if self.robot is None:
-                    self._json_response({"ok": False, "error": "Robot not connected"})
-                    return
-                self.robot.move_joints(joints, speed=speed)
-            self._json_response({"ok": True})
+                    missing = True
+                else:
+                    self.robot.move_joints(joints, speed=speed)
+            if missing:
+                self._json_response({"ok": False, "error": "Robot not connected"})
+            else:
+                self._json_response({"ok": True})
         except Exception as e:
             self._json_response({"ok": False, "error": str(e)})
 

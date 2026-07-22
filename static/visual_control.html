@@ -202,14 +202,26 @@
       #btn-h {
         background: #0f3460;
       }
+      #btn-h:hover {
+        background: #1a4f8a;
+      }
       #btn-send {
         background: #2d6a4f;
+      }
+      #btn-send:hover {
+        background: #40916c;
       }
       #btn-conn {
         background: #d4a017;
       }
+      #btn-conn:hover {
+        background: #b8860b;
+      }
       #btn-read {
         background: #4a4e69;
+      }
+      #btn-read:hover {
+        background: #6b6f8a;
       }
       #status {
         position: fixed;
@@ -563,7 +575,16 @@
 
       window.toggleConnect = async function () {
         if (connected) {
-          await api("/api/disconnect");
+          try {
+            const r = await api("/api/disconnect");
+            if (!r || !r.ok) {
+              alert("Disconnect failed");
+              return;
+            }
+          } catch (e) {
+            alert("Disconnect failed: " + e.message);
+            return;
+          }
           document.getElementById("status").textContent =
             "Offline (FK preview)";
           document.getElementById("btn-conn").textContent = "Connect";
@@ -589,11 +610,21 @@
       window.home = async function () {
         try {
           const r = await api("/api/home");
-          if (r.ok) setTimeout(window.readJoints, 3000);
-        } catch (e) {}
+          if (!r.ok) {
+            alert("Home failed: " + (r.error || "Robot not connected"));
+            return;
+          }
+          setTimeout(window.readJoints, 3000);
+        } catch (e) {
+          alert("Home failed: " + e.message);
+        }
       };
 
       window.sendAll = async function () {
+        if (!connected) {
+          alert("Not connected");
+          return;
+        }
         try {
           const qs = `j0=${joints[0]}&j1=${joints[1]}&j2=${joints[2]}&j3=${joints[3]}&j4=${joints[4]}&j5=${joints[5]}&s=50`;
           const r = await api("/api/move_all?" + qs);
@@ -610,16 +641,17 @@
       window.readJoints = async function () {
         try {
           const d = await api("/api/joints");
-          if (d.joints) {
-            joints = d.joints;
-            for (let i = 0; i < 6; i++) {
-              document.querySelectorAll(".slider-group input")[i].value =
-                joints[i];
-              document.getElementById("jv" + i).textContent =
-                joints[i].toFixed(1) + "°";
-            }
-            updatePoses();
+          document.getElementById("status").textContent =
+            d.connected ? "Connected" : "Offline (FK preview)";
+          document.getElementById("btn-conn").textContent =
+            d.connected ? "Disconnect" : "Connect";
+          connected = d.connected;
+          joints = d.joints;
+          for (let i = 0; i < 6; i++) {
+            document.querySelectorAll(".slider-group input")[i].value = joints[i];
+            document.getElementById("jv" + i).textContent = joints[i].toFixed(1) + "°";
           }
+          updatePoses();
         } catch (e) {}
       };
 
@@ -662,7 +694,7 @@
       window.recordWaypoint = async function () {
         try {
           const d = await api("/api/joints");
-          if (!d.joints) {
+          if (!d.connected) {
             alert("Not connected to robot");
             return;
           }
@@ -677,7 +709,16 @@
         const wp = waypoints[idx];
         const qs = wp.map((v, i) => `j${i}=${v}`).join("&") + "&s=50";
         api("/api/move_all?" + qs).then(r => {
-          if (r && !r.ok) alert("Move failed: " + (r.error || ""));
+          if (r && r.ok) {
+            joints = wp;
+            for (let i = 0; i < 6; i++) {
+              document.querySelectorAll(".slider-group input")[i].value = joints[i];
+              document.getElementById("jv" + i).textContent = joints[i].toFixed(1) + "°";
+            }
+            updatePoses();
+          } else {
+            alert("Move failed: " + ((r && r.error) || "unknown"));
+          }
         }).catch(e => alert("Move failed: " + e.message));
       };
 
@@ -703,6 +744,7 @@
         a.href = URL.createObjectURL(blob);
         a.download = "teaching_trajectory.json";
         a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 100);
       };
 
       window.clearWaypoints = function () {

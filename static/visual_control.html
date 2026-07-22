@@ -608,6 +608,10 @@
       };
 
       window.home = async function () {
+        if (!connected) {
+          alert("Not connected");
+          return;
+        }
         try {
           const r = await api("/api/home");
           if (!r.ok) {
@@ -641,11 +645,6 @@
       window.readJoints = async function () {
         try {
           const d = await api("/api/joints");
-          document.getElementById("status").textContent =
-            d.connected ? "Connected" : "Offline (FK preview)";
-          document.getElementById("btn-conn").textContent =
-            d.connected ? "Disconnect" : "Connect";
-          connected = d.connected;
           joints = d.joints;
           for (let i = 0; i < 6; i++) {
             document.querySelectorAll(".slider-group input")[i].value = joints[i];
@@ -691,21 +690,31 @@
         });
       }
 
+      let _recording = false;
+
       window.recordWaypoint = async function () {
+        if (!connected) {
+          alert("Not connected to robot");
+          return;
+        }
+        if (_recording) return;
+        _recording = true;
         try {
           const d = await api("/api/joints");
-          if (!d.connected) {
-            alert("Not connected to robot");
-            return;
-          }
           waypoints.push(d.joints.map(v => parseFloat(v.toFixed(1))));
           renderWaypointList();
         } catch (e) {
           alert("Read joints failed: " + e.message);
+        } finally {
+          _recording = false;
         }
       };
 
       window.gotoWaypoint = function (idx) {
+        if (!connected) {
+          alert("Not connected");
+          return;
+        }
         const wp = waypoints[idx];
         const qs = wp.map((v, i) => `j${i}=${v}`).join("&") + "&s=50";
         api("/api/move_all?" + qs).then(r => {
@@ -754,6 +763,10 @@
       };
 
       window.stopRobot = async function () {
+        if (!connected) {
+          alert("Not connected");
+          return;
+        }
         try {
           const r = await api("/api/stop");
           if (r && !r.ok) alert("Stop failed: " + (r.error || ""));

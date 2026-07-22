@@ -324,9 +324,14 @@
       ];
       const SCALE = 0.001;
 
-      let joints = [0, -73, 180, 0, 0, 0];
+      let joints = [0, 0, 90, 0, 0, 0];
       let connected = false;
       let meshObjs = [];
+
+      const FW_TO_URDF = [0, 0, -90, 0, 0, 0];
+      function fwToUrdf(jfw) {
+        return jfw.map((v, i) => v + FW_TO_URDF[i]);
+      }
 
       function rodrigues(axis, ang) {
         const c = Math.cos(ang),
@@ -355,8 +360,9 @@
 
       function fk(j) {
         let T = T_WB.clone();
+        const ju = fwToUrdf(j);
         for (let i = 0; i < 6; i++) {
-          const R = rodrigues(JOINT_AXES[i], (j[i] * Math.PI) / 180);
+          const R = rodrigues(JOINT_AXES[i], (ju[i] * Math.PI) / 180);
           const Ti = new THREE.Matrix4().copy(R);
           Ti.elements[12] = JOINT_ORIGINS[i][0];
           Ti.elements[13] = JOINT_ORIGINS[i][1];
@@ -368,9 +374,10 @@
 
       function fkChain(j) {
         let T = T_WB.clone();
+        const ju = fwToUrdf(j);
         const poses = [T.clone()];
         for (let i = 0; i < 6; i++) {
-          const R = rodrigues(JOINT_AXES[i], (j[i] * Math.PI) / 180);
+          const R = rodrigues(JOINT_AXES[i], (ju[i] * Math.PI) / 180);
           const Ti = new THREE.Matrix4().copy(R);
           Ti.elements[12] = JOINT_ORIGINS[i][0];
           Ti.elements[13] = JOINT_ORIGINS[i][1];
@@ -566,14 +573,14 @@
           document.getElementById("status").textContent = "Connected";
           document.getElementById("btn-conn").textContent = "Disconnect";
           connected = true;
-          setTimeout(readJoints, 500);
+          setTimeout(window.readJoints, 500);
         }
       };
 
       window.home = async function () {
         try {
           const r = await api("/api/home");
-          if (r.ok) setTimeout(readJoints, 3000);
+          if (r.ok) setTimeout(window.readJoints, 3000);
         } catch (e) {}
       };
 
@@ -585,7 +592,7 @@
             alert("Move failed: " + (r.error || "unknown"));
             return;
           }
-          setTimeout(readJoints, 3000);
+          setTimeout(window.readJoints, 3000);
         } catch (e) {
           alert("Move failed: " + e.message);
         }
@@ -608,7 +615,7 @@
       };
 
       window.resetPose = function () {
-        joints = [0, -73, 180, 0, 0, 0];
+        joints = [0, 0, 90, 0, 0, 0];
         for (let i = 0; i < 6; i++) {
           document.querySelectorAll(".slider-group input")[i].value = joints[i];
           document.getElementById("jv" + i).textContent =

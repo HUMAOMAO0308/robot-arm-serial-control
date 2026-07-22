@@ -21,13 +21,15 @@ import robot_kinematics  # noqa: E402
 class VirtualDummyRobot:
     """In-memory digital twin for UI development without physical hardware."""
 
+    FW_TO_URDF = [0.0, 0.0, -90.0, 0.0, 0.0, 0.0]
+
     def __init__(self, port: str = "VIRTUAL", baudrate: int = 115200, timeout: float = 1.0) -> None:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self._connected = False
         self._enabled = False
-        self._joints = [0.0] * JOINT_COUNT
+        self._joints = [0.0, 0.0, 90.0, 0.0, 0.0, 0.0]
         self._last_response = "ok VIRTUAL_READY"
         self._updated_at = time.time()
 
@@ -68,13 +70,13 @@ class VirtualDummyRobot:
 
     def home(self) -> str:
         self._require_connected()
-        self._joints = [0.0] * JOINT_COUNT
+        self._joints = [0.0, 0.0, 90.0, 0.0, 0.0, 0.0]
         return self._respond("ok !HOME")
 
     def reset(self) -> str:
         self._require_connected()
         self._enabled = False
-        self._joints = [0.0] * JOINT_COUNT
+        self._joints = [0.0, 0.0, 90.0, 0.0, 0.0, 0.0]
         return self._respond("ok !RESET")
 
     def get_joint_positions(self) -> JointPositions:
@@ -111,7 +113,8 @@ class VirtualDummyRobot:
         T_target[:3, 3] = [x / 1000.0, y / 1000.0, z / 1000.0]
 
         ik_result = robot_kinematics.inverse_kinematics(
-            T_target, initial_joints=list(self._joints),
+            T_target,
+            initial_joints=[fw + off for fw, off in zip(self._joints, self.FW_TO_URDF)],
             max_iters=200, alpha=0.2,
         )
         if ik_result is None:
@@ -119,7 +122,10 @@ class VirtualDummyRobot:
                 f"Virtual IK failed to converge for pose ({x:.1f},{y:.1f},{z:.1f})"
             )
 
-        self._joints = [max(-180.0, min(180.0, float(v))) for v in ik_result]
+        self._joints = [
+            max(-180.0, min(180.0, float(v - self.FW_TO_URDF[i])))
+            for i, v in enumerate(ik_result)
+        ]
         self._updated_at = time.time()
         return self._respond(f"ok @{x:.4f},{y:.4f},{z:.4f},{a:.4f},{b:.4f},{c:.4f}")
 

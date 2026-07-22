@@ -22,6 +22,7 @@ class VirtualDummyRobot:
     """In-memory digital twin for UI development without physical hardware."""
 
     FW_TO_URDF = [0.0, 0.0, -90.0, 0.0, 0.0, 0.0]
+    JOINT_LIMITS = [(-170, 170), (-75, 90), (35, 180), (-180, 180), (-120, 120), (-360, 360)]
 
     def __init__(self, port: str = "VIRTUAL", baudrate: int = 115200, timeout: float = 1.0) -> None:
         self.port = port
@@ -123,7 +124,9 @@ class VirtualDummyRobot:
             )
 
         self._joints = [
-            max(-180.0, min(180.0, float(v - self.FW_TO_URDF[i])))
+            max(self.JOINT_LIMITS[i][0],
+                min(self.JOINT_LIMITS[i][1],
+                    float(v - self.FW_TO_URDF[i])))
             for i, v in enumerate(ik_result)
         ]
         self._updated_at = time.time()
@@ -146,7 +149,10 @@ class VirtualDummyRobot:
         self._require_connected()
         if len(joints) != JOINT_COUNT:
             raise ValueError(f"Expected {JOINT_COUNT} joint targets, got {len(joints)}")
-        self._joints = [max(-180.0, min(180.0, float(value))) for value in joints]
+        self._joints = [
+            max(self.JOINT_LIMITS[i][0], min(self.JOINT_LIMITS[i][1], float(value)))
+            for i, value in enumerate(joints)
+        ]
         prefix = ">" if sequential else "&"
         payload = ",".join(format(value, "g") for value in self._joints)
         return self._respond(f"ok {prefix}{payload}")

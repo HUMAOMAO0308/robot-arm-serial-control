@@ -516,6 +516,15 @@
         }
       }
 
+      const JOINT_SLIDER_LIMITS = [
+        [-170, 170],
+        [-75,   90],
+        [ 35,  180],
+        [-180, 180],
+        [-120, 120],
+        [-360, 360],
+      ];
+
       // ── Sliders ──
       const panel = document.getElementById("panel");
       for (let i = 0; i < 6; i++) {
@@ -526,8 +535,8 @@
         g.appendChild(lbl);
         const inp = document.createElement("input");
         inp.type = "range";
-        inp.min = -180;
-        inp.max = 180;
+        inp.min = JOINT_SLIDER_LIMITS[i][0];
+        inp.max = JOINT_SLIDER_LIMITS[i][1];
         inp.step = 0.5;
         inp.value = joints[i];
         inp.addEventListener("input", () => {

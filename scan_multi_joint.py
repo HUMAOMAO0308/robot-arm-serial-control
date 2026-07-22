@@ -26,11 +26,11 @@ from calibrate import load_intrinsics
 # Format: (min_degrees, max_degrees, label, [default_scan_start, default_scan_end])
 JOINT_FIRMWARE_LIMITS = {
     1: (-170, 170, "J1 底座旋转", -60, 60),
-    2: (-73,  90,  "J2 肩部",   -65, -50),
+    2: (-75,  90,  "J2 肩部",   -65, -50),
     3: ( 35, 180,  "J3 肘部",   155, 135),
     4: (-180, 180, "J4 腕部旋转", -30, 30),
     5: (-120, 120, "J5 腕部俯仰", -30, 30),
-    6: (-720, 720, "J6 末端旋转", -60, 60),
+    6: (-360, 360, "J6 末端旋转", -60, 60),
 }
 
 
